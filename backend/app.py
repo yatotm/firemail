@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import threading
+import time
 import argparse
 import datetime
 import jwt
@@ -9,7 +10,7 @@ from functools import wraps
 from flask import Flask, send_from_directory, jsonify, request, Response, make_response
 from flask_cors import CORS
 from database.db import Database
-from utils.email import EmailBatchProcessor
+from utils.email import EmailBatchProcessor, OutlookMailHandler
 from ws_server.handler import WebSocketHandler
 import asyncio
 import concurrent.futures
@@ -1013,6 +1014,136 @@ def update_email(current_user, email_id):
     except Exception as e:
         logger.error(f"更新邮箱信息失败: {str(e)}")
         return jsonify({'error': '更新邮箱信息失败'}), 500
+
+@app.route('/api/emails/<int:email_id>/reauthorize', methods=['POST'])
+@token_required
+def reauthorize_email(current_user, email_id):
+    """Outlook邮箱重新授权"""
+    try:
+        email_info = db.get_email_by_id(
+            email_id,
+            None if current_user['is_admin'] else current_user['id']
+        )
+        if not email_info:
+            return jsonify({'error': '邮箱不存在或您没有权限'}), 404
+
+        if email_info.get('mail_type') != 'outlook':
+            return jsonify({'error': '仅支持Outlook邮箱重新授权'}), 400
+
+        client_id = email_info.get('client_id')
+        if not client_id:
+            return jsonify({'error': '缺少Client ID'}), 400
+
+        device_info = OutlookMailHandler.start_device_code_flow(client_id)
+        if not device_info:
+            return jsonify({'error': '获取设备码失败'}), 502
+
+        ws_handler.send_reauthorize_status(
+            current_user['id'],
+            email_id,
+            'pending',
+            user_code=device_info.get('user_code'),
+            verification_uri=device_info.get('verification_uri'),
+            message='等待用户授权'
+        )
+
+        def poll_task():
+            logger.info(f"开始设备码轮询: email_id={email_id}, user_id={current_user['id']}")
+            interval = device_info.get('interval', 5)
+            device_code = device_info.get('device_code')
+            if not device_code:
+                logger.error(f"设备码缺失: email_id={email_id}")
+                ws_handler.send_reauthorize_status(
+                    current_user['id'],
+                    email_id,
+                    'error',
+                    message='设备码缺失'
+                )
+                return
+
+            try:
+                poll_count = 0
+                while True:
+                    poll_count += 1
+                    logger.debug(f"轮询第{poll_count}次: email_id={email_id}")
+                    result = OutlookMailHandler.poll_device_code(device_code, client_id, interval)
+                    status = result.get('status')
+                    logger.info(f"轮询结果: email_id={email_id}, status={status}")
+
+                    if status == 'pending':
+                        interval = result.get('interval', interval)
+                        time.sleep(interval)
+                        continue
+
+                    if status == 'success':
+                        logger.info(f"设备码授权成功: email_id={email_id}")
+                        tokens = result.get('tokens', {})
+                        access_token = tokens.get('access_token')
+                        refresh_token = tokens.get('refresh_token')
+                        if not access_token or not refresh_token:
+                            logger.error(f"授权响应缺少token: email_id={email_id}, has_access={bool(access_token)}, has_refresh={bool(refresh_token)}")
+                            ws_handler.send_reauthorize_status(
+                                current_user['id'],
+                                email_id,
+                                'error',
+                                message='授权响应缺少refresh_token'
+                            )
+                            return
+
+                        updated = db.update_email_token(
+                            email_id,
+                            access_token,
+                            refresh_token=refresh_token
+                        )
+                        if not updated:
+                            logger.error(f"更新token失败: email_id={email_id}")
+                            ws_handler.send_reauthorize_status(
+                                current_user['id'],
+                                email_id,
+                                'error',
+                                message='刷新令牌更新失败'
+                            )
+                            return
+
+                        logger.info(f"token更新成功，发送WebSocket通知: email_id={email_id}, user_id={current_user['id']}")
+                        ws_handler.send_reauthorize_status(
+                            current_user['id'],
+                            email_id,
+                            'success',
+                            message='授权成功'
+                        )
+                        return
+
+                    message = result.get('error_description') or result.get('message') or '授权失败'
+                    logger.error(f"设备码授权失败: email_id={email_id}, message={message}")
+                    ws_handler.send_reauthorize_status(
+                        current_user['id'],
+                        email_id,
+                        'error',
+                        message=message
+                    )
+                    return
+            except Exception as e:
+                logger.error(f"设备码轮询失败: email_id={email_id}, error={str(e)}")
+                ws_handler.send_reauthorize_status(
+                    current_user['id'],
+                    email_id,
+                    'error',
+                    message='设备码轮询异常'
+                )
+
+        threading.Thread(target=poll_task, daemon=True).start()
+
+        return jsonify({
+            'email_id': email_id,
+            'user_code': device_info.get('user_code'),
+            'verification_uri': device_info.get('verification_uri'),
+            'expires_in': device_info.get('expires_in'),
+            'interval': device_info.get('interval'),
+        })
+    except Exception as e:
+        logger.error(f"重新授权请求失败: {str(e)}")
+        return jsonify({'error': '重新授权请求失败'}), 500
 
 @app.route('/api/email/start_real_time_check', methods=['POST'])
 @token_required

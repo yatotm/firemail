@@ -11,7 +11,8 @@ export const useEmailsStore = defineStore('emails', {
     processingEmails: {},
     currentMailRecords: [],
     currentEmailId: null,
-    isConnected: false
+    isConnected: false,
+    reauthorizeStatus: null
   }),
 
   getters: {
@@ -114,6 +115,21 @@ export const useEmailsStore = defineStore('emails', {
             this.currentMailRecords = [];
             console.error('收到的邮件记录数据不是数组格式:', data);
           }
+        }
+      });
+
+      // 重新授权状态
+      websocket.onMessage('reauthorize_status', (message) => {
+        console.log('收到reauthorize_status消息:', message);
+        const payload = message?.data || {};
+        const emailId = payload?.email_id ?? payload?.emailId ?? null;
+        const status = payload?.status || 'pending';
+        const msg = payload?.message || payload?.error || '';
+        this.reauthorizeStatus = { emailId, status, message: msg };
+        console.log('更新reauthorizeStatus:', this.reauthorizeStatus);
+
+        if (status === 'success') {
+          this.fetchEmails();
         }
       });
 
@@ -341,6 +357,22 @@ export const useEmailsStore = defineStore('emails', {
       }
     },
 
+    // 重新授权邮箱
+    async reauthorize(emailId) {
+      this.error = null;
+      this.reauthorizeStatus = { emailId, status: 'pending', message: '' };
+
+      try {
+        const response = await api.reauthorizeEmail(emailId);
+        return response?.data ?? response;
+      } catch (error) {
+        const message = error?.response?.data?.message || error?.message || '重新授权失败';
+        this.reauthorizeStatus = { emailId, status: 'error', message };
+        this.error = message;
+        throw error;
+      }
+    },
+
     // 选择/取消选择邮箱
     toggleSelectEmail(emailId) {
       if (!Array.isArray(this.selectedEmails)) {
@@ -374,6 +406,7 @@ export const useEmailsStore = defineStore('emails', {
       this.currentMailRecords = [];
       this.currentEmailId = null;
       this.isConnected = false;
+      this.reauthorizeStatus = null;
     },
 
     // 更新邮箱

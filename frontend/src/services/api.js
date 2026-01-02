@@ -259,6 +259,10 @@ const apiMethods = {
     return api.get(`/emails/${emailId}/password`);
   },
 
+  reauthorizeEmail: (emailId) => {
+    return api.post(`/emails/${emailId}/reauthorize`);
+  },
+
   importEmails: (data, mailType) => {
     return api.post('/emails/import', { data, mail_type: mailType });
   },

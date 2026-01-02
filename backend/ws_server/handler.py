@@ -15,6 +15,7 @@ class WebSocketHandler:
         self.db = None
         self.email_processor = None
         self.port = 8765
+        self.loop = None
         self.clients = {}  # 连接的客户端 {websocket: user_id}
         self.user_sockets = {}  # 用户的连接 {user_id: set(websockets)}
         self.client_tokens = {}  # 存储客户端的认证信息
@@ -512,6 +513,46 @@ class WebSocketHandler:
             logger.debug(f"成功向用户 {user_id} 的 {success_count} 个连接广播消息: {message['type']}")
         
         return success_count > 0
+
+    def send_to_user_threadsafe(self, user_id, message):
+        """线程安全地向指定用户发送消息"""
+        if not self.loop:
+            logger.warning("WebSocket事件循环未初始化，无法发送消息")
+            return False
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.broadcast_to_user(user_id, message),
+            self.loop
+        )
+        try:
+            return future.result(timeout=2)
+        except Exception as e:
+            logger.error(f"发送WebSocket消息失败: {str(e)}")
+            return False
+
+    def send_reauthorize_status(self, user_id, email_id, status, user_code=None, verification_uri=None, message=None):
+        """发送设备码重新授权状态"""
+        data = {
+            'email_id': email_id,
+            'status': status,
+        }
+        if user_code:
+            data['user_code'] = user_code
+        if verification_uri:
+            data['verification_uri'] = verification_uri
+        if message:
+            data['message'] = message
+
+        logger.info(f"发送重新授权状态: user_id={user_id}, email_id={email_id}, status={status}, message={message}")
+        result = self.send_to_user_threadsafe(user_id, {
+            'type': 'reauthorize_status',
+            'data': data,
+        })
+        if result:
+            logger.info(f"重新授权状态发送成功: user_id={user_id}, email_id={email_id}")
+        else:
+            logger.warning(f"重新授权状态发送失败: user_id={user_id}, email_id={email_id}")
+        return result
     
     async def broadcast_emails_deleted(self, email_ids):
         """向所有连接的客户端广播邮箱已删除的消息"""
@@ -765,6 +806,7 @@ class WebSocketHandler:
         """启动WebSocket服务器"""
         # 创建事件循环
         loop = asyncio.new_event_loop()
+        self.loop = loop
         asyncio.set_event_loop(loop)
         
         # 启动WebSocket服务器

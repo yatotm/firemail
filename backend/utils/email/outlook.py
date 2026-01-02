@@ -159,17 +159,121 @@ class OutlookMailHandler:
         }
         try:
             response = requests.post(url, data=data)
-            result_status = response.json().get('error')
+            payload = response.json()
+            result_status = payload.get('error')
             if result_status is not None:
-                logger.error(f"获取访问令牌失败: {result_status}")
-                return None
-            else:
-                new_access_token = response.json()['access_token']
-                logger.info("成功获取新的访问令牌")
-                return new_access_token
+                error_description = payload.get('error_description')
+                if error_description:
+                    logger.error(f"获取访问令牌失败: {result_status} - {error_description}")
+                else:
+                    logger.error(f"获取访问令牌失败: {result_status}")
+                return None, None
+
+            new_access_token = payload.get('access_token')
+            if not new_access_token:
+                logger.error("获取访问令牌失败: access_token为空")
+                return None, None
+
+            new_refresh_token = payload.get('refresh_token')
+            logger.info("成功获取新的访问令牌")
+            return new_access_token, new_refresh_token
         except Exception as e:
             logger.error(f"刷新令牌过程中发生异常: {str(e)}")
+            return None, None
+
+    @staticmethod
+    def start_device_code_flow(client_id):
+        """启动Device Code Flow并返回验证信息"""
+        url = 'https://login.microsoftonline.com/common/oauth2/v2.0/devicecode'
+        data = {
+            'client_id': client_id,
+            'scope': 'offline_access https://outlook.office.com/IMAP.AccessAsUser.All',
+        }
+        try:
+            response = requests.post(url, data=data)
+            payload = response.json()
+            error = payload.get('error')
+            if error:
+                error_description = payload.get('error_description')
+                if error_description:
+                    logger.error(f"设备码请求失败: {error} - {error_description}")
+                else:
+                    logger.error(f"设备码请求失败: {error}")
+                return None
+
+            required_fields = ['device_code', 'user_code', 'verification_uri', 'expires_in', 'interval']
+            missing_fields = [field for field in required_fields if field not in payload]
+            if missing_fields:
+                logger.error(f"设备码响应缺少字段: {', '.join(missing_fields)}")
+                return None
+
+            return {field: payload[field] for field in required_fields}
+        except Exception as e:
+            logger.error(f"请求设备码过程中发生异常: {str(e)}")
             return None
+
+    @staticmethod
+    def poll_device_code(device_code, client_id, interval):
+        """轮询Device Code Flow状态"""
+        url = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
+        data = {
+            'client_id': client_id,
+            'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+            'device_code': device_code,
+        }
+        try:
+            response = requests.post(url, data=data)
+            payload = response.json()
+            error = payload.get('error')
+            if error:
+                error_description = payload.get('error_description')
+                if error == 'authorization_pending':
+                    return {
+                        'status': 'pending',
+                        'message': error,
+                        'interval': interval,
+                    }
+                if error == 'slow_down':
+                    return {
+                        'status': 'pending',
+                        'message': error,
+                        'interval': interval + 5,
+                    }
+                if error == 'expired_token':
+                    logger.error("设备码已过期")
+                    return {
+                        'status': 'error',
+                        'message': error,
+                    }
+
+                if error_description:
+                    logger.error(f"设备码轮询失败: {error} - {error_description}")
+                else:
+                    logger.error(f"设备码轮询失败: {error}")
+                return {
+                    'status': 'error',
+                    'message': error,
+                    'error_description': error_description,
+                }
+
+            access_token = payload.get('access_token')
+            if not access_token:
+                logger.error("设备码授权成功但access_token为空")
+                return {
+                    'status': 'error',
+                    'message': 'invalid_response',
+                }
+
+            return {
+                'status': 'success',
+                'tokens': payload,
+            }
+        except Exception as e:
+            logger.error(f"轮询设备码过程中发生异常: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e),
+            }
 
     @staticmethod
     def generate_auth_string(user, token):
@@ -345,7 +449,7 @@ class OutlookMailHandler:
 
         try:
             # 获取新的访问令牌
-            access_token = OutlookMailHandler.get_new_access_token(refresh_token, client_id)
+            access_token, new_refresh_token = OutlookMailHandler.get_new_access_token(refresh_token, client_id)
             if not access_token:
                 error_msg = f"邮箱{email_address}(ID={email_id})获取访问令牌失败"
                 logger.error(error_msg)
@@ -356,7 +460,7 @@ class OutlookMailHandler:
                 }
 
             # 更新令牌到数据库
-            db.update_email_token(email_id, access_token)
+            db.update_email_token(email_id, access_token, refresh_token=new_refresh_token)
 
             # 报告进度
             progress_callback(10, "开始获取邮件...")

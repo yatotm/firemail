@@ -7,7 +7,7 @@ services:
     container_name: firemail
     restart: unless-stopped
     ports:
-      - "80:80"  # 只暴露一个端口，通过Nginx进行反向代理
+      - "12380:80"  # 只暴露一个端口，通过Nginx进行反向代理
     volumes:
       - ./backend/data:/app/backend/data
     environment:

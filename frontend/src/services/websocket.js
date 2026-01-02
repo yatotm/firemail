@@ -22,6 +22,7 @@ const MessageTypes = {
   EMAILS_DELETED: 'emails_deleted',    // 邮箱已删除
   EMAIL_ADDED: 'email_added',          // 邮箱已添加
   MAIL_RECORDS: 'mail_records',        // 邮件记录
+  REAUTHORIZE_STATUS: 'reauthorize_status', // 重新授权状态
 
   // 通知消息
   INFO: 'info',                        // 信息通知

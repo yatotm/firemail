@@ -113,15 +113,14 @@
               <span>{{ formatDate(scope.row.last_check_time) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" fixed="right" width="360">
+          <el-table-column label="操作" fixed="right" width="260">
             <template #default="scope">
-              <div class="action-buttons flex gap-sm">
+              <div class="action-buttons">
                 <el-button
                   type="primary"
                   size="small"
                   :disabled="isEmailProcessing(scope.row)"
                   @click="handleCheck(scope.row)"
-                  class="action-btn"
                 >
                   {{ getEmailActionText(scope.row) }}
                 </el-button>
@@ -129,26 +128,28 @@
                   type="success"
                   size="small"
                   @click="handleViewMails(scope.row)"
-                  class="action-btn"
                 >
                   查看邮件
                 </el-button>
-                <el-button
-                  type="danger"
-                  size="small"
-                  @click="handleDelete(scope.row)"
-                  class="action-btn"
-                >
-                  删除
-                </el-button>
-                <el-button
-                  type="warning"
-                  size="small"
-                  @click="handleEdit(scope.row)"
-                  class="action-btn"
-                >
-                  编辑
-                </el-button>
+                <el-dropdown trigger="click" @command="(cmd) => handleActionCommand(cmd, scope.row)">
+                  <el-button size="small">
+                    更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="scope.row.mail_type === 'outlook'"
+                        command="reauthorize"
+                      >
+                        重新授权
+                      </el-dropdown-item>
+                      <el-dropdown-item command="delete" divided>
+                        <span style="color: #f56c6c">删除</span>
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </template>
           </el-table-column>
@@ -440,12 +441,101 @@
           </span>
         </template>
       </el-dialog>
+
+      <!-- 重新授权对话框 -->
+      <el-dialog
+        v-model="reauthorizeDialogVisible"
+        title="重新授权"
+        width="560px"
+        class="reauthorize-dialog"
+        @close="resetReauthorizeDialog"
+      >
+        <div v-loading="reauthorizeLoading" class="reauthorize-body">
+          <!-- 邮箱账号密码信息 -->
+          <div v-if="reauthorizeEmail" class="reauthorize-account-section">
+            <div class="reauthorize-account-title">登录信息</div>
+            <div class="reauthorize-account-row">
+              <span class="reauthorize-account-label">邮箱账号：</span>
+              <span class="reauthorize-account-value">{{ reauthorizeEmail.email }}</span>
+              <el-button
+                size="small"
+                :icon="CopyDocument"
+                @click="copyText(reauthorizeEmail.email, '邮箱账号')"
+                circle
+              />
+            </div>
+            <div class="reauthorize-account-row">
+              <span class="reauthorize-account-label">邮箱密码：</span>
+              <span class="reauthorize-account-value password-value">{{ reauthorizeEmail.password || '******' }}</span>
+              <el-button
+                size="small"
+                :icon="CopyDocument"
+                @click="copyText(reauthorizeEmail.password, '邮箱密码')"
+                :disabled="!reauthorizeEmail.password || reauthorizeEmail.password === '******'"
+                circle
+              />
+            </div>
+          </div>
+
+          <el-divider />
+
+          <div class="reauthorize-section">
+            <div class="reauthorize-label">1. 请在浏览器中访问以下链接</div>
+            <el-link
+              v-if="reauthorizeInfo.verificationUri"
+              :href="reauthorizeInfo.verificationUri"
+              target="_blank"
+              type="primary"
+              class="reauthorize-link"
+            >
+              {{ reauthorizeInfo.verificationUri }}
+            </el-link>
+            <div v-else class="reauthorize-placeholder">等待授权链接</div>
+          </div>
+
+          <div class="reauthorize-section">
+            <div class="reauthorize-label">2. 登录后输入验证码</div>
+            <div class="reauthorize-code-row">
+              <div class="reauthorize-code">
+                {{ reauthorizeInfo.userCode || '—' }}
+              </div>
+              <el-button
+                size="small"
+                type="primary"
+                @click="copyUserCode"
+                :disabled="!reauthorizeInfo.userCode"
+              >
+                {{ copied ? '已复制' : '复制' }}
+              </el-button>
+            </div>
+          </div>
+
+          <div class="reauthorize-meta">
+            <div class="reauthorize-countdown">剩余时间：{{ countdownText }}</div>
+            <div class="reauthorize-status">
+              当前状态：
+              <el-tag :type="reauthorizeStatusType" effect="plain">
+                {{ reauthorizeStatusText }}
+              </el-tag>
+              <span v-if="currentReauthorizeMessage" class="reauthorize-message">
+                {{ currentReauthorizeMessage }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="reauthorizeDialogVisible = false">关闭</el-button>
+          </span>
+        </template>
+      </el-dialog>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, reactive, watch, onBeforeUnmount } from 'vue'
 import { useEmailsStore } from '@/store/emails'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import {
@@ -457,7 +547,9 @@ import {
   Message,
   View,
   Hide,
-  InfoFilled
+  InfoFilled,
+  ArrowDown,
+  CopyDocument
 } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import DOMPurify from 'dompurify'
@@ -475,6 +567,20 @@ const mailContentDialogVisible = ref(false)
 const mailListDialogVisible = ref(false)
 const addingEmail = ref(false)
 const importing = ref(false)
+const reauthorizeDialogVisible = ref(false)
+const reauthorizeLoading = ref(false)
+const reauthorizeEmailId = ref(null)
+const reauthorizeInfo = ref({
+  verificationUri: '',
+  userCode: '',
+  expiresIn: 0
+})
+const reauthorizeEmail = ref(null) // 当前重新授权的邮箱信息
+const reauthorizeCountdown = ref(null)
+const reauthorizeExpiresAt = ref(0)
+const copied = ref(false)
+let reauthorizeTimer = null
+let copyTimer = null
 
 // 添加邮箱表单引用
 const addEmailFormRef = ref(null)
@@ -616,6 +722,27 @@ const loading = computed(() => emailsStore.loading)
 const currentEmail = computed(() => emailsStore.getEmailById(emailsStore.currentEmailId))
 const mailRecords = computed(() => emailsStore.currentMailRecords)
 const hasSelectedEmails = computed(() => emailsStore.hasSelectedEmails)
+const currentReauthorizeStatus = computed(() => {
+  const status = emailsStore.reauthorizeStatus
+  if (!status || status.emailId !== reauthorizeEmailId.value) {
+    return { status: 'pending', message: '' }
+  }
+  return status
+})
+const reauthorizeStatusText = computed(() => {
+  const status = currentReauthorizeStatus.value.status
+  if (status === 'success') return '授权成功'
+  if (status === 'error') return '授权失败'
+  return '等待授权'
+})
+const reauthorizeStatusType = computed(() => {
+  const status = currentReauthorizeStatus.value.status
+  if (status === 'success') return 'success'
+  if (status === 'error') return 'danger'
+  return 'warning'
+})
+const currentReauthorizeMessage = computed(() => currentReauthorizeStatus.value.message || '')
+const countdownText = computed(() => formatCountdown(reauthorizeCountdown.value))
 
 // 方法
 const refreshEmails = async () => {
@@ -747,6 +874,190 @@ const handleViewMails = async (row) => {
     ElMessage.error('获取邮件记录失败: ' + (error.message || '未知错误'))
   } finally {
     loadingMails.value = false
+  }
+}
+
+const clearReauthorizeTimer = () => {
+  if (reauthorizeTimer) {
+    clearInterval(reauthorizeTimer)
+    reauthorizeTimer = null
+  }
+}
+
+const updateReauthorizeCountdown = () => {
+  if (!reauthorizeExpiresAt.value) {
+    reauthorizeCountdown.value = null
+    return
+  }
+  const remainingMs = reauthorizeExpiresAt.value - Date.now()
+  const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000))
+  reauthorizeCountdown.value = remainingSeconds
+  if (remainingSeconds === 0) {
+    clearReauthorizeTimer()
+  }
+}
+
+const startReauthorizeCountdown = (expiresIn) => {
+  clearReauthorizeTimer()
+  const seconds = Number(expiresIn) || 0
+  if (seconds > 0) {
+    reauthorizeExpiresAt.value = Date.now() + seconds * 1000
+    updateReauthorizeCountdown()
+    reauthorizeTimer = setInterval(updateReauthorizeCountdown, 1000)
+  } else {
+    reauthorizeExpiresAt.value = 0
+    reauthorizeCountdown.value = null
+  }
+}
+
+const formatCountdown = (seconds) => {
+  if (seconds === null || seconds === undefined) return '—'
+  if (seconds <= 0) return '已过期'
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+const resetReauthorizeDialog = () => {
+  reauthorizeLoading.value = false
+  reauthorizeEmailId.value = null
+  reauthorizeEmail.value = null
+  reauthorizeInfo.value = {
+    verificationUri: '',
+    userCode: '',
+    expiresIn: 0
+  }
+  reauthorizeExpiresAt.value = 0
+  reauthorizeCountdown.value = null
+  copied.value = false
+  if (copyTimer) {
+    clearTimeout(copyTimer)
+    copyTimer = null
+  }
+  clearReauthorizeTimer()
+}
+
+// 通用复制方法
+const copyText = async (text, label = '内容') => {
+  if (!text) return
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+    ElMessage.success(`${label}已复制`)
+  } catch (error) {
+    console.error(`复制${label}失败:`, error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+const copyUserCode = async () => {
+  const code = reauthorizeInfo.value.userCode
+  if (!code) return
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(code)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = code
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+
+    copied.value = true
+    if (copyTimer) {
+      clearTimeout(copyTimer)
+    }
+    copyTimer = setTimeout(() => {
+      copied.value = false
+      copyTimer = null
+    }, 1500)
+    ElMessage.success('验证码已复制')
+  } catch (error) {
+    console.error('复制验证码失败:', error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+// 处理下拉菜单命令
+const handleActionCommand = (command, row) => {
+  switch (command) {
+    case 'view':
+      handleViewMails(row)
+      break
+    case 'edit':
+      handleEdit(row)
+      break
+    case 'reauthorize':
+      handleReauthorize(row)
+      break
+    case 'delete':
+      handleDelete(row)
+      break
+  }
+}
+
+const handleReauthorize = async (row) => {
+  reauthorizeDialogVisible.value = true
+  reauthorizeLoading.value = true
+  reauthorizeEmailId.value = row.id
+  reauthorizeEmail.value = { ...row } // 保存当前邮箱信息
+  reauthorizeInfo.value = {
+    verificationUri: '',
+    userCode: '',
+    expiresIn: 0
+  }
+  reauthorizeExpiresAt.value = 0
+  reauthorizeCountdown.value = null
+  copied.value = false
+  if (copyTimer) {
+    clearTimeout(copyTimer)
+    copyTimer = null
+  }
+  clearReauthorizeTimer()
+
+  // 如果密码是隐藏的，先获取密码
+  if (!row.password || row.password === '******') {
+    try {
+      const response = await emailsStore.getEmailPassword(row.id)
+      if (response && response.password) {
+        reauthorizeEmail.value.password = response.password
+      }
+    } catch (error) {
+      console.error('获取密码失败:', error)
+    }
+  }
+
+  try {
+    const data = await emailsStore.reauthorize(row.id)
+    const verificationUri = data?.verification_uri || data?.verificationUri || ''
+    const userCode = data?.user_code || data?.userCode || ''
+    const expiresIn = Number(data?.expires_in ?? data?.expiresIn ?? 0)
+    reauthorizeInfo.value = {
+      verificationUri,
+      userCode,
+      expiresIn
+    }
+    startReauthorizeCountdown(expiresIn)
+  } catch (error) {
+    console.error('重新授权失败:', error)
+  } finally {
+    reauthorizeLoading.value = false
   }
 }
 
@@ -1202,6 +1513,24 @@ const submitEditForm = async () => {
   }
 }
 
+watch(
+  () => emailsStore.reauthorizeStatus,
+  (status) => {
+    if (!status || status.emailId !== reauthorizeEmailId.value) return
+
+    if (status.status === 'success') {
+      ElMessage.success('授权成功')
+      reauthorizeDialogVisible.value = false
+    } else if (status.status === 'error') {
+      ElMessage.error(status.message || '授权失败')
+    }
+  }
+)
+
+onBeforeUnmount(() => {
+  resetReauthorizeDialog()
+})
+
 // 生命周期钩子
 onMounted(() => {
   emailsStore.initWebSocketListeners()
@@ -1295,15 +1624,8 @@ onMounted(() => {
 
 .action-buttons {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  justify-content: space-around;
-}
-
-.action-btn {
-  min-width: 70px;
-  margin: 2px;
-  white-space: nowrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .mail-dialog-header {
@@ -1491,5 +1813,109 @@ onMounted(() => {
 
 .hover-scale:hover:not(:disabled) {
   transform: scale(1.05);
+}
+
+.reauthorize-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 4px;
+}
+
+.reauthorize-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reauthorize-label {
+  color: var(--secondary-text-color);
+  font-weight: 500;
+}
+
+.reauthorize-link {
+  word-break: break-all;
+}
+
+.reauthorize-placeholder {
+  color: var(--secondary-text-color);
+  font-size: 0.9rem;
+}
+
+.reauthorize-code-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.reauthorize-code {
+  font-family: monospace;
+  font-size: 1.8rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  padding: 10px 16px;
+  background: var(--bg-light);
+  border-radius: var(--border-radius);
+}
+
+.reauthorize-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reauthorize-countdown {
+  color: var(--secondary-text-color);
+}
+
+.reauthorize-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reauthorize-message {
+  color: var(--secondary-text-color);
+  font-size: 0.9rem;
+}
+
+.reauthorize-account-section {
+  background: var(--bg-light);
+  border-radius: var(--border-radius);
+  padding: 12px 16px;
+}
+
+.reauthorize-account-title {
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--primary-color);
+}
+
+.reauthorize-account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.reauthorize-account-row:last-child {
+  margin-bottom: 0;
+}
+
+.reauthorize-account-label {
+  color: var(--secondary-text-color);
+  min-width: 80px;
+}
+
+.reauthorize-account-value {
+  flex: 1;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.reauthorize-account-value.password-value {
+  font-weight: 500;
 }
 </style>

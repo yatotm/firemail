@@ -527,14 +527,20 @@ class Database:
         )
         self.conn.commit()
 
-    def update_email_token(self, email_id, access_token):
+    def update_email_token(self, email_id, access_token, refresh_token=None):
         """更新Outlook邮箱的访问令牌"""
         logger.debug(f"更新邮箱访问令牌, ID: {email_id}")
         try:
-            self.conn.execute(
-                "UPDATE emails SET access_token = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (access_token, email_id)
-            )
+            if refresh_token is None:
+                self.conn.execute(
+                    "UPDATE emails SET access_token = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (access_token, email_id)
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE emails SET access_token = ?, refresh_token = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (access_token, refresh_token, email_id)
+                )
             self.conn.commit()
             logger.info(f"成功更新邮箱 ID:{email_id} 的访问令牌")
             return True
