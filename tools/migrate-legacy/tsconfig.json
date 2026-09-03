@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"],
+    // 本工具不声明依赖，复用 apps/server 的 node_modules（见 package.json 的说明）
+    "typeRoots": ["../../apps/server/node_modules/@types"]
+  },
+  "include": ["src/**/*.ts"]
+}

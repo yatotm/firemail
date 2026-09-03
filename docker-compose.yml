@@ -1,24 +1,30 @@
-version: '3'
+name: firemail-v2
 
 services:
   firemail:
-    build: .
-    image: luofengyuan/firemail:latest
-    container_name: firemail
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yatotm1994/firemail:2
+    container_name: firemail-v2
     restart: unless-stopped
     ports:
-      - "12380:80"  # 只暴露一个端口，通过Nginx进行反向代理
+      - "12380:3000"
     volumes:
-      - ./backend/data:/app/backend/data
+      - ./data:/app/data
+    # compose 只会用 .env 做 ${} 插值，不会把它注入容器；env_file 才会。
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - TZ=Asia/Shanghai
-      - HOST=0.0.0.0
-      - FLASK_PORT=5000  # 后端服务器端口
-      - WS_PORT=8765     # WebSocket服务器端口
-      - JWT_SECRET_KEY=huohuo_email_secret_key
+      TZ: ${TZ:-Asia/Shanghai}
+      NODE_ENV: production
+      FIREMAIL_DB_PATH: /app/data/firemail.db
+      # 可选：不设置时服务端自动生成并持久化到数据目录
+      FIREMAIL_ENCRYPTION_KEY: ${FIREMAIL_ENCRYPTION_KEY:-}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
-      start_period: 20s 
+      start_period: 20s

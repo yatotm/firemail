@@ -1,0 +1,87 @@
+name: Docker image
+
+# 触发时机：
+#   - push 到 master        -> 推 edge 与 sha-xxxxxxx 标签
+#   - push v* 语义化标签    -> 推 2 / 2.0 / 2.0.0 / latest
+#   - 改动 Dockerfile 的 PR -> 只构建不推送，尽早发现构建期问题
+#
+# 这里刻意不加 paths-ignore：push 的路径过滤同样作用于 tag，
+# 一个只改了文档的提交被打上发版标签时会整个跳过构建，那比多跑几次构建糟糕得多。
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pnpm-lock.yaml
+      - .github/workflows/docker-image.yml
+  workflow_dispatch:
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 多架构说明：v2 的镜像里没有任何写死架构的二进制（v1 曾内置 amd64 的 Caddy）。
+      # node:22-alpine 有 amd64/arm64 两个变体，全部原生依赖
+      # （better-sqlite3、esbuild、rollup、@tailwindcss/oxide、lightningcss）
+      # 都发布了 linux-arm64 / linuxmusl-arm64 产物，因此 arm64 是真的能构建出来的。
+      - name: 准备 QEMU（arm64 交叉构建）
+        if: github.event_name != 'pull_request'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 计算镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Docker Hub 的仓库名不允许大写字母，这里必须是全小写。
+          images: yatotm1994/firemail
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/master' }}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=FireMail
+            org.opencontainers.image.description=自托管的多账号邮件聚合客户端
+            org.opencontainers.image.licenses=Apache-2.0
+
+      # 需要仓库 Secrets：DOCKER_HUB_USERNAME、DOCKER_HUB_TOKEN（Docker Hub 的 Access Token）
+      - name: 登录 Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # PR 只验 amd64：arm64 走 QEMU 模拟，跑一次要十几分钟，不值得卡住每个 PR
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

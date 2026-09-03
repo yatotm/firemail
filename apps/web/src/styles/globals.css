@@ -1,0 +1,457 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+ * 字体：只自托管 Latin 字形，CJK 交给系统字体（一套思源黑体 SC 子集也有 3–8 MB）。
+ * 不走 Google Fonts —— 内网自托管应用，外部 CDN 既慢又是隐私泄漏。
+ * ------------------------------------------------------------------------- */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+
+/* ---------------------------------------------------------------------------
+ * 色板（docs/design/tokens.md）。对比度是用 oklch → sRGB → WCAG 相对亮度实算的，
+ * 由 src/styles/tokens.test.ts 直接解析本文件断言，改低会红。
+ *
+ * ⚠ 与 tokens.md 的一处差异：文档里深色 --border / --input 带 alpha，其对比度是按
+ * 线性光混合算的（14% → 3.33:1）。浏览器对 rgba 的合成发生在 gamma 编码的 sRGB 空间，
+ * 实测 14% 只有 1.52:1。这里改用能真正达到 3:1 的 alpha（34% / 40%），
+ * 合成后的视觉效果与文档给出的目标色（≈#6c6b6b / #7e7e7d）一致。
+ * ------------------------------------------------------------------------- */
+:root {
+  --radius: 0.625rem; /* 10px */
+
+  --background: oklch(0.994 0.003 60);
+  --foreground: oklch(0.21 0.012 55);
+  --card: oklch(1 0.002 60);
+  --card-foreground: oklch(0.21 0.012 55);
+  --popover: oklch(1 0.002 60);
+  --popover-foreground: oklch(0.21 0.012 55);
+
+  --primary: oklch(0.55 0.14 42);
+  --primary-foreground: oklch(0.985 0.008 60);
+  --secondary: oklch(0.962 0.008 60);
+  --secondary-foreground: oklch(0.28 0.015 55);
+  --muted: oklch(0.966 0.006 60);
+  --muted-foreground: oklch(0.52 0.014 55);
+  --accent: oklch(0.955 0.016 52);
+  --accent-foreground: oklch(0.3 0.032 45);
+
+  /* status=error 用红，status=auth_error 用琥珀：用户能自己修的和系统故障必须可分 */
+  --destructive: oklch(0.55 0.2 27);
+  --destructive-foreground: oklch(1 0 0);
+  --destructive-subtle: oklch(0.96 0.025 25);
+  --destructive-subtle-foreground: oklch(0.33 0.1 27);
+  --success: oklch(0.5 0.11 156);
+  --success-foreground: oklch(1 0 0);
+  --success-subtle: oklch(0.955 0.03 158);
+  --success-subtle-foreground: oklch(0.3 0.06 158);
+  --warning: oklch(0.53 0.13 68);
+  --warning-foreground: oklch(1 0 0);
+  --warning-subtle: oklch(0.955 0.045 82);
+  --warning-subtle-foreground: oklch(0.32 0.07 62);
+
+  /* --border 只分隔同色系表面（1.28:1，1.4.11 装饰性豁免）；控件边界一律用 --input */
+  --border: oklch(0.912 0.006 60);
+  --input: oklch(0.64 0.014 58);
+  --ring: oklch(0.55 0.14 42);
+
+  --chart-1: oklch(0.55 0.14 42);
+  --chart-2: oklch(0.58 0.11 78);
+  --chart-3: oklch(0.53 0.1 168);
+  --chart-4: oklch(0.52 0.11 258);
+  --chart-5: oklch(0.54 0.14 348);
+
+  --sidebar: oklch(0.978 0.005 60);
+  --sidebar-foreground: oklch(0.21 0.012 55);
+  --sidebar-primary: oklch(0.55 0.14 42);
+  --sidebar-primary-foreground: oklch(0.985 0.008 60);
+  --sidebar-accent: oklch(0.945 0.016 52);
+  --sidebar-accent-foreground: oklch(0.3 0.032 45);
+  --sidebar-border: oklch(0.912 0.006 60);
+  --sidebar-ring: oklch(0.55 0.14 42);
+
+  /* App 专属 */
+  --fm-row-hover: oklch(0.972 0.01 55);
+  --fm-row-selected: oklch(0.94 0.03 52);
+  --fm-row-checked: oklch(0.955 0.016 52);
+  --fm-paper: oklch(1 0 0);
+  --fm-paper-foreground: oklch(0.2 0 0);
+  --fm-paper-frame: oklch(0.9 0.006 60);
+  --fm-code-bg: oklch(0.955 0.03 52);
+  --fm-code-foreground: oklch(0.3 0.1 42);
+  --fm-quote-border: oklch(0.85 0.012 60);
+  --fm-overlay: oklch(0.21 0.012 55 / 45%);
+  --fm-ident-l: 0.58; /* 账号身份色明度：12 个色相全部 ≥3.8:1 vs background */
+
+  /* 阴影（暖色投影，与中性色同色温） */
+  --fm-shadow-xs: 0 1px 2px 0 oklch(0.21 0.012 55 / 5%);
+  --fm-shadow-sm: 0 1px 3px 0 oklch(0.21 0.012 55 / 8%), 0 1px 2px -1px oklch(0.21 0.012 55 / 6%);
+  --fm-shadow-md: 0 4px 10px -2px oklch(0.21 0.012 55 / 9%), 0 2px 4px -2px oklch(0.21 0.012 55 / 6%);
+  --fm-shadow-lg: 0 12px 28px -6px oklch(0.21 0.012 55 / 14%), 0 4px 8px -4px oklch(0.21 0.012 55 / 8%);
+  --fm-shadow-xl: 0 24px 56px -12px oklch(0.21 0.012 55 / 20%);
+
+  /* z 层级表：组件只允许引用这些名字，禁止出现 z-[9999] */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-rail: 20;
+  --z-dropdown: 30;
+  --z-drawer: 40;
+  --z-compose: 45;
+  --z-dialog: 50;
+  --z-command: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+
+  /* 列表密度：由 <html data-density> 覆写，组件读 --fm-row-height */
+  --fm-row-height: 4rem;
+}
+
+.dark {
+  --background: oklch(0.168 0.008 55);
+  --foreground: oklch(0.94 0.006 60);
+  --card: oklch(0.212 0.009 55);
+  --card-foreground: oklch(0.94 0.006 60);
+  --popover: oklch(0.212 0.009 55);
+  --popover-foreground: oklch(0.94 0.006 60);
+
+  --primary: oklch(0.68 0.145 45);
+  --primary-foreground: oklch(0.19 0.024 45);
+  --secondary: oklch(0.262 0.01 55);
+  --secondary-foreground: oklch(0.94 0.006 60);
+  --muted: oklch(0.262 0.01 55);
+  --muted-foreground: oklch(0.7 0.012 60);
+  --accent: oklch(0.292 0.018 50);
+  --accent-foreground: oklch(0.94 0.006 60);
+
+  /* 深色下白字压在 --destructive 上只有 3.36:1，必须换深墨字 */
+  --destructive: oklch(0.66 0.17 25);
+  --destructive-foreground: oklch(0.18 0.05 27);
+  --destructive-subtle: oklch(0.3 0.07 26);
+  --destructive-subtle-foreground: oklch(0.78 0.14 25);
+  --success: oklch(0.74 0.13 158);
+  --success-foreground: oklch(0.18 0.04 158);
+  --success-subtle: oklch(0.3 0.05 158);
+  --success-subtle-foreground: oklch(0.8 0.12 158);
+  --warning: oklch(0.8 0.13 78);
+  --warning-foreground: oklch(0.18 0.04 78);
+  --warning-subtle: oklch(0.31 0.05 78);
+  --warning-subtle-foreground: oklch(0.85 0.12 80);
+
+  /* 深色靠描边分层（tokens.md §7），所以边框比浅色更实：34% → 3.09:1，40% → 3.80:1 vs card */
+  --border: oklch(1 0 0 / 34%);
+  --input: oklch(1 0 0 / 40%);
+  --ring: oklch(0.68 0.145 45);
+
+  --chart-1: oklch(0.68 0.145 45);
+  --chart-2: oklch(0.74 0.1 82);
+  --chart-3: oklch(0.7 0.09 168);
+  --chart-4: oklch(0.65 0.12 258);
+  --chart-5: oklch(0.68 0.13 348);
+
+  --sidebar: oklch(0.196 0.009 55);
+  --sidebar-foreground: oklch(0.94 0.006 60);
+  --sidebar-primary: oklch(0.68 0.145 45);
+  --sidebar-primary-foreground: oklch(0.19 0.024 45);
+  --sidebar-accent: oklch(0.292 0.018 50);
+  --sidebar-accent-foreground: oklch(0.94 0.006 60);
+  --sidebar-border: oklch(1 0 0 / 34%);
+  --sidebar-ring: oklch(0.68 0.145 45);
+
+  --fm-row-hover: oklch(0.245 0.01 52);
+  --fm-row-selected: oklch(0.3 0.035 48);
+  --fm-row-checked: oklch(0.275 0.02 50);
+  --fm-paper: oklch(1 0 0);
+  --fm-paper-foreground: oklch(0.2 0 0);
+  --fm-paper-frame: oklch(0.36 0.008 55);
+  --fm-code-bg: oklch(0.3 0.035 48);
+  --fm-code-foreground: oklch(0.88 0.09 60);
+  --fm-quote-border: oklch(0.4 0.01 55);
+  --fm-overlay: oklch(0.1 0.006 55 / 65%);
+  --fm-ident-l: 0.72;
+
+  /* 深色下大面积阴影会糊成一片，改用更黑的投影 + 极淡的顶部高光边 */
+  --fm-shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 40%);
+  --fm-shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 50%);
+  --fm-shadow-md: 0 4px 10px -2px oklch(0 0 0 / 55%), inset 0 1px 0 0 oklch(1 0 0 / 5%);
+  --fm-shadow-lg: 0 12px 28px -6px oklch(0 0 0 / 65%), inset 0 1px 0 0 oklch(1 0 0 / 6%);
+  --fm-shadow-xl: 0 24px 56px -12px oklch(0 0 0 / 75%), inset 0 1px 0 0 oklch(1 0 0 / 7%);
+}
+
+/* 列表密度：紧凑 40 / 适中 64 / 舒适 84；移动端强制舒适（触控目标 ≥44px） */
+html[data-density="compact"] {
+  --fm-row-height: 2.5rem;
+}
+html[data-density="cozy"] {
+  --fm-row-height: 4rem;
+}
+html[data-density="comfortable"] {
+  --fm-row-height: 5.25rem;
+}
+@media (width < 48rem) {
+  html {
+    --fm-row-height: 5.25rem;
+  }
+}
+
+@theme inline {
+  /* ── 断点：新增 3xl，其余用 Tailwind v4 默认（rem，跟随浏览器字号设置）── */
+  --breakpoint-3xl: 100rem;
+
+  /* ── 字体：Latin 必须排在 CJK 前，否则 Inter 永远轮不到 ── */
+  --font-sans:
+    "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "HarmonyOS Sans SC",
+    "Hiragino Sans GB", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+    "Noto Color Emoji";
+  --font-mono:
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", "SFMono-Regular", Menlo,
+    Consolas, "Liberation Mono", "Sarasa Mono SC", "Noto Sans Mono CJK SC", monospace;
+
+  /* ── 字号 ── */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.625rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.375rem;
+
+  /* ── 行高别名（CJK 比 Latin 需要更松）── */
+  --leading-tight: 1.35;
+  --leading-normal: 1.5;
+  --leading-cjk: 1.6;
+  --leading-relaxed: 1.75;
+
+  /* ── 圆角 ── */
+  --radius-xs: 0.25rem;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 10px);
+
+  /* ── 阴影 ── */
+  --shadow-xs: var(--fm-shadow-xs);
+  --shadow-sm: var(--fm-shadow-sm);
+  --shadow-md: var(--fm-shadow-md);
+  --shadow-lg: var(--fm-shadow-lg);
+  --shadow-xl: var(--fm-shadow-xl);
+
+  /* ── 动效 ── */
+  --ease-out-quart: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-quart: cubic-bezier(0.5, 0, 0.75, 0);
+
+  /* ── 颜色映射（shadcn 约定）── */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-subtle: var(--destructive-subtle);
+  --color-destructive-subtle-foreground: var(--destructive-subtle-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-subtle: var(--success-subtle);
+  --color-success-subtle-foreground: var(--success-subtle-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-warning-subtle-foreground: var(--warning-subtle-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* App 专属 */
+  --color-row-hover: var(--fm-row-hover);
+  --color-row-selected: var(--fm-row-selected);
+  --color-row-checked: var(--fm-row-checked);
+  --color-paper: var(--fm-paper);
+  --color-paper-foreground: var(--fm-paper-foreground);
+  --color-paper-frame: var(--fm-paper-frame);
+  --color-code-bg: var(--fm-code-bg);
+  --color-code-foreground: var(--fm-code-foreground);
+  --color-quote-border: var(--fm-quote-border);
+  --color-overlay: var(--fm-overlay);
+
+  /* ── 面板与行高档位 ── */
+  --spacing-row-compact: 2.5rem;
+  --spacing-row-cozy: 4rem;
+  --spacing-row-comfortable: 5.25rem;
+  --spacing-row: var(--fm-row-height);
+  --spacing-sidebar: 16.25rem; /* 260 */
+  --spacing-sidebar-wide: 17.5rem; /* 280 */
+  --spacing-sidebar-rail: 3.5rem; /* 56 */
+}
+
+/* z 层级：Tailwind v4 没有 z-index 主题命名空间，用 @utility 固定成一张表 */
+@utility z-base {
+  z-index: var(--z-base);
+}
+@utility z-sticky {
+  z-index: var(--z-sticky);
+}
+@utility z-rail {
+  z-index: var(--z-rail);
+}
+@utility z-dropdown {
+  z-index: var(--z-dropdown);
+}
+@utility z-drawer {
+  z-index: var(--z-drawer);
+}
+@utility z-compose {
+  z-index: var(--z-compose);
+}
+@utility z-dialog {
+  z-index: var(--z-dialog);
+}
+@utility z-command {
+  z-index: var(--z-command);
+}
+@utility z-toast {
+  z-index: var(--z-toast);
+}
+@utility z-tooltip {
+  z-index: var(--z-tooltip);
+}
+
+/** 数字对齐：时间戳、大小、计数、验证码 */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/** 中文段落用更松的行高 */
+@utility prose-cjk {
+  line-height: var(--leading-cjk);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    /* CJK 与 Latin/数字之间自动加空隙，Chrome 121+ / Safari 18+ */
+    text-spacing-trim: space-first;
+    text-autospace: normal;
+  }
+
+  ::selection {
+    background: var(--fm-row-selected);
+  }
+
+  /* 键盘焦点才画环，鼠标点击不画 */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+
+  /* Windows 高对比度：只有颜色本身承载信息的地方保留自定义色 */
+  @media (forced-colors: active) {
+    .fm-account-bar,
+    .fm-status-dot {
+      forced-color-adjust: none;
+    }
+
+    :focus-visible {
+      outline: 2px solid CanvasText;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* 打印：只留正文（accessibility.md #20） */
+  @media print {
+    .fm-no-print {
+      display: none !important;
+    }
+
+    body {
+      background: white;
+      color: black;
+    }
+  }
+}

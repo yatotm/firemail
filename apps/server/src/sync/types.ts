@@ -1,0 +1,101 @@
+import type { ImapFlow } from 'imapflow';
+import type { Db, Sqlite } from '../db/client.ts';
+import type * as schema from '../db/schema.ts';
+
+export type AccountRow = typeof schema.accounts.$inferSelect;
+export type FolderRow = typeof schema.folders.$inferSelect;
+export type MessageRow = typeof schema.messages.$inferSelect;
+
+export type FolderSpecialUse = 'inbox' | 'sent' | 'drafts' | 'trash' | 'junk' | 'archive';
+
+/**
+ * 同步引擎实际用到的 ImapFlow 方法子集。
+ * 用 `Pick<ImapFlow, ...>` 而不是手抄接口：签名与真实库永远一致，
+ * 真实 provider 返回的 ImapFlow 天然可赋值，测试里的假服务器只需实现这几个方法。
+ */
+export type ImapClient = Pick<
+  ImapFlow,
+  | 'list'
+  | 'mailboxOpen'
+  | 'fetch'
+  | 'messageFlagsAdd'
+  | 'messageFlagsRemove'
+  | 'messageMove'
+  | 'messageDelete'
+  | 'download'
+  | 'logout'
+  | 'close'
+>;
+
+/**
+ * provider 契约（由 providers/ 实现）。
+ * `connectImap` 返回的连接必须已认证；关闭由本模块负责。
+ */
+export interface MailProvider {
+  readonly id: 'outlook' | 'gmail' | 'qq' | 'imap';
+  connectImap(account: AccountRow): Promise<ImapClient>;
+  createTransport(account: AccountRow): Promise<unknown>;
+}
+
+/** 账号 -> provider 的解析函数，避免同步引擎直接依赖 provider 注册表实现。 */
+export type ProviderResolver = (account: AccountRow) => MailProvider;
+
+export type ImapConnect = (account: AccountRow) => Promise<ImapClient>;
+
+/** 把 provider 注册表适配成同步引擎需要的 connect 函数。 */
+export function connectVia(resolve: ProviderResolver): ImapConnect {
+  return (account) => resolve(account).connectImap(account);
+}
+
+export interface SyncLogger {
+  debug(message: string, meta?: Record<string, unknown>): void;
+  info(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+
+export const NOOP_LOGGER: SyncLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
+
+/** 同步引擎的依赖注入点：测试里换掉 connect 即可完全脱离网络。 */
+export interface SyncDeps {
+  db: Db;
+  sqlite: Sqlite;
+  connect: ImapConnect;
+  log?: SyncLogger;
+}
+
+export interface FolderSyncResult {
+  folderId: number;
+  path: string;
+  /** 新落库的邮件数。 */
+  newMessages: number;
+  /** 仅标记变化而被更新的邮件数。 */
+  updatedMessages: number;
+  /** 服务器上已消失、本地标记为已删除的邮件数。 */
+  vanished: number;
+  /** UIDVALIDITY 变更后凭 Message-ID 重新挂上 UID 的邮件数。 */
+  relinked: number;
+  uidValidityChanged: boolean;
+  /** true 表示走了全量 UID 对账，而不是只取高水位以上。 */
+  reconciled: boolean;
+  errors: string[];
+}
+
+export interface AccountSyncResult {
+  accountId: number;
+  runId: number | null;
+  status: 'ok' | 'error';
+  newMessages: number;
+  folders: FolderSyncResult[];
+  error: string | null;
+  startedAt: number;
+  finishedAt: number;
+}
+
+/** 同步被自身超时或调用方取消。 */
+export class SyncAbortedError extends Error {}

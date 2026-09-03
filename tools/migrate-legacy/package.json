@@ -1,0 +1,13 @@
+{
+  "name": "@firemail/migrate-legacy",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "花火邮箱 v1 (huohuo_email.db) → v2 数据迁移与校验 CLI",
+  "scripts": {
+    "start": "node --experimental-strip-types src/cli.ts",
+    "test": "node --test --experimental-strip-types src/*.test.ts",
+    "typecheck": "../../apps/server/node_modules/.bin/tsc -p tsconfig.json"
+  },
+  "comment": "不声明依赖：全部通过相对路径复用 apps/server 的 src 与 node_modules（better-sqlite3 / drizzle-orm），保证与服务端 schema、加密实现完全同源。"
+}

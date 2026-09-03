@@ -1,17 +1,30 @@
-# Python
+# --- Node / pnpm (v2) ---
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+.turbo/
+
+# 运行时数据目录（v2 的 SQLite 库、附件、自动生成的密钥）
+/data/
+# 凭据加密密钥。泄露=所有邮箱凭据可解密，丢失=只能逐个重新授权
+.encryption-key
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# --- 旧版 Python 后端 ---
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .Python
 env/
-build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
@@ -19,30 +32,25 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
 
-# Vue
-.DS_Store
-node_modules
+# --- 旧版 Vue 前端 ---
 /frontend/dist
 /frontend/node_modules
 
-# Local Netlify folder
-.netlify
-
-# local env files
+# 本地环境变量
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*.local
 
-# Log files
+# 日志
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Editor directories and files
+# 编辑器 / 系统
+.DS_Store
 .idea
 .vscode
 *.suo
@@ -51,7 +59,5 @@ pnpm-debug.log*
 *.sln
 *.sw?
 
-# SQLite database
-backend/data/*.db 
-
 .claude
+.netlify

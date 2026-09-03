@@ -1,0 +1,15 @@
+From: Alt <alt@example.com>
+Subject: alternative
+Message-ID: <alt-001@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="BOUND1"
+
+--BOUND1
+Content-Type: text/plain; charset=utf-8
+
+纯文本版本正文。
+--BOUND1
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>HTML 版本正文。</p></body></html>
+--BOUND1--

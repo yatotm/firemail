@@ -1,0 +1,79 @@
+name: 缺陷报告
+description: 报告一个能复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先确认：
+        - 已经翻过 [已有 issue](https://github.com/yatotm/firemail/issues?q=is%3Aissue)
+        - 已经看过[部署](https://github.com/yatotm/firemail/blob/master/docs/deployment.md)与[配置](https://github.com/yatotm/firemail/blob/master/docs/configuration.md)文档
+
+        **不要在 issue 里贴邮箱口令、`refresh_token`、`FIREMAIL_ENCRYPTION_KEY` 或任何日志里的凭据片段。**
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 问题描述
+      description: 发生了什么，你期望发生什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开「账号」页
+        2. 点击某个账号的「测试连接」
+        3. 页面一直转圈，控制台报 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: |
+        `docker compose logs --tail 200 firemail`。必要时把 `LOG_LEVEL` 调成 `debug` 再复现一次。
+        贴之前请自行脱敏。
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 镜像标签或 commit，例如 `yatotm1994/firemail:2` / `sha-1a2b3c4`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - docker run
+        - 源码运行（pnpm dev）
+        - 其它
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境
+      description: 操作系统、CPU 架构、是否在反向代理后面
+      placeholder: Debian 12 / amd64 / nginx 反代
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: 涉及的邮箱类型
+      multiple: true
+      options:
+        - Outlook / Hotmail
+        - Gmail
+        - QQ 邮箱
+        - 自定义 IMAP
+        - 与邮箱类型无关

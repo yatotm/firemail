@@ -1,0 +1,39 @@
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # npm / pnpm workspace。分组是为了不被每周十几个补丁 PR 淹掉：
+  # 补丁与次版本合成一个 PR，大版本单独开，因为它们要人看 changelog。
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore(deps)'
+      prefix-development: 'chore(deps-dev)'
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # 原生模块换大版本会连带换 ABI / 预编译包，必须人工在两个架构上验过再升
+      - dependency-name: better-sqlite3
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'ci(deps)'
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'chore(docker)'

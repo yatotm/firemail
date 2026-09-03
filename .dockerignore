@@ -1,27 +1,41 @@
-# 忽略所有文件，然后再包含必要的文件
-*
+# 旧版 Python/Vue 代码不参与 v2 构建；backend/data 是生产库，绝不能进构建上下文
+backend/
+frontend/
+mailpit/
+docs/
+.git/
+.github/
+.claude/
+.pytest_cache/
 
-# 包含必要文件
-!backend/
-!frontend/src/
-!frontend/package.json
-!frontend/package-lock.json
-!frontend/index.html
-!frontend/vite.config.js
-!requirements.txt
-!docker-entrypoint.sh
-!nginx.conf
-!Caddyfile
-
-# 忽略不需要的目录和文件
-**/__pycache__/
-**/*.pyc
-**/*.pyo
-**/*.pyd
-**/.git/
-**/.vscode/
-**/.idea/
+node_modules/
 **/node_modules/
+dist/
+**/dist/
+.vite/
 **/.vite/
-frontend/dist/
-backend/data/*.db 
+
+# 运行时数据
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store
+.idea/
+.vscode/
+**/__pycache__/
+**/*.py[cod]
+
+# 旧版遗留的构建产物
+Caddyfile
+nginx.conf
+env-config.js
+docker-entrypoint.sh

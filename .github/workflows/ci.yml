@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 版本取自根 package.json 的 packageManager 字段，不在这里再写一遍
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # shared 是被依赖的包，不先构建的话 server/web 拿不到它的 dist
+      - name: 构建 shared
+        run: pnpm --filter @firemail/shared build
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 前端 lint
+        run: pnpm --filter @firemail/web lint
+
+      - name: 测试（workspace）
+        run: pnpm test
+
+      # migrate-legacy 不在 pnpm workspace 里（它靠相对路径复用 apps/server 的源码与
+      # node_modules，以保证加密实现和 schema 与服务端完全同源），所以要单独跑
+      - name: 测试（迁移工具）
+        working-directory: tools/migrate-legacy
+        run: pnpm test
+
+      - name: 构建
+        run: pnpm build

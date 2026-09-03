@@ -1,0 +1,41 @@
+From: =?utf-8?B?6Iqx54Gr5Zui6Zif?= <team@example.com>
+To: a@example.com, "B, Person" <b@example.com>
+Cc: c@example.com
+Subject: nested structure
+Message-ID: <nested-001@example.com>
+In-Reply-To: <root-000@example.com>
+References: <root-000@example.com> <mid-000@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="OUTER"
+
+--OUTER
+Content-Type: multipart/related; boundary="REL"; type="multipart/alternative"
+
+--REL
+Content-Type: multipart/alternative; boundary="ALT"
+
+--ALT
+Content-Type: text/plain; charset=utf-8
+
+文本正文，见图。
+--ALT
+Content-Type: text/html; charset=utf-8
+
+<p>HTML 正文 <img src="cid:logo@example.com"></p>
+--ALT--
+--REL
+Content-Type: image/png; name="logo.png"
+Content-ID: <logo@example.com>
+Content-Disposition: inline; filename="logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGNgAAACAAEABf4C/qfA
+0eQAAAAASUVORK5CYII=
+--REL--
+--OUTER
+Content-Type: application/pdf; name="=?gb2312?B?sai45g==?=.pdf"
+Content-Disposition: attachment; filename="=?gb2312?B?sai45g==?=.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iago8PD4+CmVuZG9iagp0cmFpbGVyCiUlRU9GCg==
+--OUTER--

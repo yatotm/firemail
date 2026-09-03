@@ -1,162 +1,290 @@
-# 🔥 FireMail - 花火邮箱助手
+<div align="center">
 
-🌟 一款专为多种邮箱设计的批量收件工具，提供简单高效的邮件管理解决方案。
+<img src="apps/web/public/icon-192.png" width="88" height="88" alt="FireMail" />
 
-[![GitHub](https://img.shields.io/github/license/fengyuanluo/firemail)](https://github.com/fengyuanluo/firemail)
+# FireMail
 
-## 🖼️ 项目截图
+**自托管的多账号邮件聚合客户端**
 
-![image](https://git.adust.f5.si/gh/fengyuanluo/tuchuang@main/20250410194654.png)
+把几十个 Outlook / Gmail / QQ / 自建 IMAP 邮箱收进一条信流，一眼看清哪个账号的授权坏了。
 
-![image](https://git.adust.f5.si/gh/fengyuanluo/tuchuang@main/20250410194726.png)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](package.json)
+[![Docker](https://img.shields.io/badge/docker-yatotm1994%2Ffiremail%3A2-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![Build](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml/badge.svg)](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml)
 
-![image](https://git.adust.f5.si/gh/fengyuanluo/tuchuang@main/20250410194744.png)
+[快速开始](#快速开始) · [配置](#配置) · [文档](docs/README.md) · [从 v1 迁移](docs/migration-v1-to-v2.md)
 
-## 📋 项目功能
-
-- 📥 **批量导入邮箱**：支持"邮箱----密码----客户端ID----RefreshToken"的批量导入格式
-- 📊 **邮箱管理**：批量操作多个邮箱账户，支持单个或批量删除
-- 📬 **自动收信**：对导入的邮箱进行自动收信操作，支持全部收信或选择性收信
-- 👥 **多用户系统**：支持用户注册、登录，权限分级管理，管理员可管理所有用户
-- 🔐 **安全管理**：数据存储在本地SQLite数据库，密码采用PBKDF2和SHA-256算法加密
-- 🔍 **邮件搜索**：支持按关键词、发件人、主题等条件搜索邮件
-- 📱 **响应式设计**：适配桌面和移动设备，提供良好的用户体验
-
-## 📧 支持的邮箱类型
-
-目前已支持以下类型的邮箱：
-
-- **Microsoft Outlook**
-- **Hotmail**
-- **Gmail**
-- **QQ邮箱**
-- **IMAP协议邮箱**（通用支持）
-
-## ✨ 项目特点
-
-- 🚀 **批量管理**：支持多选、全选邮箱，进行批量删除、收信操作
-- 🔄 **WebSocket实时通信**：及时反馈处理进度和结果，提供良好的交互体验
-- 🧵 **多线程处理**：提高邮件收取效率，支持并行处理多个邮箱
-- 🎨 **简洁界面**：基于Vue 3和Element Plus构建简约现代的用户界面
-- 💻 **跨平台支持**：支持Windows和Linux平台，满足不同环境需求
-- 🔧 **Docker支持**：可打包为Docker容器快速部署，提供多种部署方式
-
-## 🏗️ 系统架构
-
-FireMail采用前后端分离的架构设计，主要包含以下几个核心部分：
-
-1. **前端界面**：基于Vue.js和Element Plus构建的用户界面
-2. **后端API服务**：使用Flask框架实现的RESTful API
-3. **WebSocket服务**：用于实时通信和进度反馈
-4. **数据库**：SQLite关系型数据库用于数据存储
-5. **邮件处理引擎**：处理邮件收取、解析和存储的核心模块
-
-```
-+-------------------+        +-------------------+
-|                   |        |                   |
-|   用户浏览器       |  HTTP  |   前端应用        |
-|   (Browser)       |<------>|   (Vue.js)        |
-|                   |        |                   |
-+-------------------+        +---------^---------+
-                                      |
-                                      | WebSocket/HTTP
-                                      |
-+-------------------+        +---------v---------+
-|                   |        |                   |
-|   数据库          |<------>|   后端API服务      |
-|   (SQLite)        |        |   (Flask)         |
-|                   |        |                   |
-+-------------------+        +---------^---------+
-                                      |
-                                      | 调用
-                                      |
-                             +---------v---------+
-                             |                   |
-                             |   邮件处理引擎     |
-                             |   (Python)        |
-                             |                   |
-                             +-------------------+
-                                      |
-                                      | OAuth/IMAP
-                                      |
-                             +---------v---------+
-                             |                   |
-                             |   邮件服务器       |
-                             |   (Outlook等)     |
-                             |                   |
-                             +-------------------+
-```
-
-## 🛠️ 技术栈
-
-- **后端**：Python 3.10+, Flask, SQLite, WebSocket
-- **前端**：Vue 3, Vite, Element Plus
-- **其他**：OAuth 2.0, IMAP, Docker
-
-## 📚 文档
-
-详细的部署指南、使用说明和API文档请查看项目的`docs`文件夹：
-
-- **部署指南**：[docs/部署指南.md](docs/部署指南.md)
-- **用户指南**：[docs/用户指南.md](docs/用户指南.md)
-- **API接口文档**：[docs/API接口文档.md](docs/API接口文档.md)
-- **系统架构**：[docs/系统架构.md](docs/系统架构.md)
-
-## 🔮 未来开发计划
-
-### 📧 更多邮箱类型支持
-
-- **Yahoo Mail**：雅虎邮箱
-- **163邮箱**：网易163邮箱
-- **Proton Mail**：注重隐私的加密邮箱
-- **Zoho Mail**：企业邮箱解决方案
-
-### 🎨 界面美化
-
-- **深色模式**：提供暗黑主题支持
-- **自定义主题**：允许用户自定义界面颜色
-- **更多视觉效果**：添加过渡动画和交互反馈
-- **移动端优化**：进一步优化移动设备体验
-- **响应式布局增强**：适配更多屏幕尺寸
-
-### 📤 发件功能支持
-
-- **基础发信功能**：支持纯文本和HTML格式邮件发送
-- **定时发送**：设置邮件在特定时间发送
-- **群发功能**：支持一次向多个收件人发送邮件
-- **邮件模板**：预设多种邮件模板，快速编辑发送
-- **草稿保存**：自动保存未完成的邮件为草稿
-
-### 📈 邮箱功能增强
-
-- **邮件分类与标签**：智能分类和标签管理
-- **邮件过滤规则**：自定义邮件过滤和自动处理规则
-- **邮件提醒**：重要邮件的通知提醒
-- **邮件归档**：长期存储和归档管理
-- **数据分析**：邮件使用情况统计和可视化分析
-
-## 📄 开源协议
-
-本项目采用 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) 许可证进行开源。
-
-## ⚠️ 免责声明
-
-1. 本工具仅用于方便用户管理自己的邮箱账户，请勿用于非法用途。
-2. 使用本工具过程中产生的任何数据安全问题、账户安全问题或违反相关服务条款的行为，均由用户自行承担责任。
-3. 开发者不对使用本工具过程中可能出现的任何损失或风险负责。
-4. 本工具与Microsoft、Google等邮箱服务提供商没有任何官方关联，使用时请遵守相关服务条款。
-5. 邮箱账号和密码等敏感信息仅存储在本地SQLite数据库中，请确保服务器安全，防止数据泄露。
-6. 使用本工具可能会受到邮箱服务提供商的API访问限制或策略变更的影响，如遇访问受限，请遵循相关提供商的政策调整使用方式。
-7. 本工具不保证100%的兼容性和可用性，可能因第三方服务变更而需要更新。
-8. 用户在使用过程中应遵守当地法律法规，不得用于侵犯他人隐私或其他非法活动。
-9. 本软件按"原样"提供，不提供任何形式的保证，无论是明示的还是暗示的。
-
-## 🔗 相关链接
-
-- 项目地址：[https://github.com/fengyuanluo/firemail](https://github.com/fengyuanluo/firemail)
-- 问题反馈：请在项目的Issues页面提交
-- 文档目录：查看`/docs`文件夹获取更详细的使用指南、API文档和部署说明
+</div>
 
 ---
 
-💖 如果您喜欢这个项目，请给它一个Star！ 
+## 这是什么
+
+FireMail 是一个**只给自己用**的邮件聚合器。它解决的是这样一类人的问题：
+
+> 手上有几十个邮箱账号，绝大多数邮件是验证码和注册确认信。
+> 需要的不是精读一封信，而是**在几十个账号的信流里，三秒内找到那一封**，
+> 顺便一眼看出哪几个账号的授权已经挂了。
+
+所以它长成现在这样：默认是跨账号的聚合视图而不是一堆标签页；
+验证码在列表行里就高亮出来、一键复制，不用打开邮件；
+账号的健康状态是常驻在侧栏的一等信息，而不是一个转瞬即逝的报错提示。
+
+它**不是**一个通用邮件客户端的替代品，也不适合多租户或团队场景——
+虽然支持多用户和权限分级，但设计重心是单人自托管。
+
+> **v2 是一次彻底重写。** v1 是 Python/Flask + Vue 2 + 独立 WebSocket 进程 + Caddy，
+> 代码仍在 `backend/` 与 `frontend/` 目录里，等切换完成后会删除。
+> 老用户请看[从 v1 迁移](docs/migration-v1-to-v2.md)。
+
+## 截图
+
+> 以下是占位图，v2 上线后会换成真实截图。
+
+| 统一收件箱 | 账号管理 | 全文检索 |
+| --- | --- | --- |
+| [![统一收件箱](docs/images/inbox.png)](docs/images/inbox.png) | [![账号管理](docs/images/accounts.png)](docs/images/accounts.png) | [![全文检索](docs/images/search.png)](docs/images/search.png) |
+
+## 功能
+
+**多账号聚合**
+
+- Outlook / Hotmail（OAuth2，支持 refresh token 与设备码重新授权）、Gmail、QQ 邮箱、任意 IMAP
+- 跨账号的统一信流，也可以按单个账号查看
+- 批量导入：`邮箱----密码----客户端ID----RefreshToken` 一行一条
+- 账号健康状态 `active / auth_error / error / disabled` 是一等信息；
+  `auth_error` 能自己修（重新授权），`error` 是系统性故障，两者视觉可分
+
+**同步**
+
+- **全文件夹同步**：收件箱、已发送、草稿、已删除、垃圾、归档、便笺、发件箱共 8 类
+  （v1 只同步收件箱）
+- 增量以 `(UIDVALIDITY, UID 高水位)` 为准，带空洞检测；UIDVALIDITY 变化时按 `Message-ID`
+  重新认领而不是删库重来
+- 周期调度带 ±20% 抖动，避免几十个账号每轮同时到期；账号级互斥 + 全局有界连接池
+- 实时进度经 SSE 推送，同类事件自动合并
+
+**读与写**
+
+- 会话视图、星标、批量标记/移动/删除，标记变更先写 IMAP 再改本地
+- 发信：新建 / 回复 / 全部回复 / 转发，附件、内联图片、每账号签名
+- 发信与同步统一是「202 + 轮询/推送」，绝不让 HTTP 请求挂在 SMTP 会话上；
+  支持 `Idempotency-Key`，重放不会真的再发一封
+
+**检索**
+
+- SQLite FTS5 + trigram 分词器，中文可搜子串
+- 短于 3 字符（含「验证」这种两字中文）自动退回 LIKE 兜底，
+  响应里的 `mode` 字段会说明走了哪条路
+
+**安全**
+
+- 账号凭据 AES-256-GCM 静态加密，密钥不落数据库；API 响应永远不含密码或 token
+- 邮件正文四道独立防线：服务端唯一白名单净化 → 只进 `<iframe srcdoc>` →
+  sandbox 不含 `allow-scripts` → 双重 CSP
+- 远程图片默认拦截，放行时走带 HMAC 签名的图片代理（含完整的 SSRF 防护清单）
+- 会话令牌是随机串、数据库只存 sha256，登出与改口令能真正吊销
+- CSRF 用来源校验，失败即拒绝；分级限流，已认证按用户计数
+
+**部署**
+
+- 单镜像单端口：Fastify 同时提供 API 和前端静态资源，无需 nginx / Caddy
+- 容器内以非 root 用户运行，约 250 MB，支持 `linux/amd64` 与 `linux/arm64`
+- 数据库迁移在启动时自动、幂等执行
+
+## 快速开始
+
+```bash
+git clone https://github.com/yatotm/firemail.git
+cd firemail
+cp .env.example .env
+
+# 生成并填入加密主密钥（见下方警告）
+openssl rand -base64 32
+
+docker compose up -d
+docker compose logs -f
+```
+
+打开 `http://<服务器地址>:12381`。
+
+**没有预置账号，也没有默认口令。** 注册第一个用户即成为管理员；
+之后自助注册默认关闭，需要管理员在设置里显式打开。
+
+> 默认端口是 12381 而不是 12380，因为 v1 还占着 12380，两者可以并行跑。
+> v1 下线后可以在 `docker-compose.yml` 里改回来。
+
+不想用 compose：
+
+```bash
+docker run -d \
+  --name firemail-v2 \
+  --restart unless-stopped \
+  -p 12381:3000 \
+  -v "$PWD/data:/app/data" \
+  -e TZ=Asia/Shanghai \
+  -e FIREMAIL_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  yatotm1994/firemail:2
+```
+
+完整部署说明（反向代理、备份、健康检查、升级）见 [docs/deployment.md](docs/deployment.md)。
+
+## ⚠️ 关于加密主密钥
+
+`FIREMAIL_ENCRYPTION_KEY` 保护数据库里**全部账号凭据**：IMAP/SMTP 口令、OAuth
+`refresh_token` 与 `access_token`。
+
+> **丢了这把钥匙，所有邮箱账号都必须逐个重新授权，没有任何找回手段。**
+
+- 留空时服务端会在首次启动生成一把，写到 `<数据目录>/.encryption-key`（权限 600），
+  并在日志里打一段醒目提示。这能用，但**你必须知道它在哪、并且把它备份走**。
+- 更推荐的做法是**首次启动前**自己生成一把写进 `.env`，密钥归属从一开始就明确：
+
+  ```bash
+  openssl rand -base64 32
+  ```
+
+- 数据库里存着密钥指纹。换错钥匙启动会**直接失败并说明原因**，
+  而不是让几十个账号在后台悄悄全部认证失败。
+- 备份时请把整个数据目录带走：`firemail.db` + `.encryption-key` + `attachments/`。
+  只备份数据库而丢了密钥，等于什么都没备份。
+
+## 配置
+
+全部配置来自环境变量，启动时一次性校验，错配置直接中止而不是带病运行。
+
+常用项：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `PORT` | `3000` | 容器内监听端口，API 与前端共用 |
+| `TZ` | 跟随系统 | IANA 时区，如 `Asia/Shanghai` |
+| `FIREMAIL_ENCRYPTION_KEY` | 自动生成 | 凭据主密钥，32 字节的 hex 或 base64。见上方警告 |
+| `FIREMAIL_DATA_DIR` | 镜像内 `/app/data` | 数据目录：密钥文件与附件 |
+| `FIREMAIL_DB_PATH` | `<数据目录>/firemail.db` | SQLite 路径 |
+| `FIREMAIL_SYNC_CONCURRENCY` | `4` | 同时同步的账号数上限（1–32） |
+| `FIREMAIL_SYNC_SCHEDULER` | `true` | 周期同步总开关 |
+| `FIREMAIL_CORS_ORIGINS` | 空 | 跨源白名单，逗号分隔。**不接受 `*`** |
+| `FIREMAIL_TRUST_PROXY` | `false` | 在反向代理后面时打开 |
+| `FIREMAIL_MAX_UPLOAD_MB` | `25` | 单附件上传上限（1–200） |
+| `LOG_LEVEL` | `info` | pino 日志级别 |
+
+还有 8 个不常改的（会话有效期、SSE 连接数上限、停机宽限期等），
+完整的权威列表、取值范围与失败表现见 [docs/configuration.md](docs/configuration.md)。
+
+> Compose 的 `.env` 只做变量替换，**不会自动把变量注入容器**。目前 `docker-compose.yml`
+> 只引用了 `TZ` 和 `FIREMAIL_ENCRYPTION_KEY`；要让其它变量通过 `.env` 生效，
+> 给 `firemail` 服务加一行 `env_file: .env`。
+
+## 从 v1 升级
+
+v1 与 v2 的 schema 完全不同，**没有原地升级**。搬迁靠一次性 CLI：
+
+```bash
+# 1. 停掉 v1 并取一个数据库快照（旧应用每 60 秒轮换一次 refresh_token，
+#    对着还在写的库做校验会误报）
+docker stop firemail
+cp backend/data/huohuo_email.db /tmp/huohuo-snapshot.db
+
+# 2. 先空跑一遍，只出报告不落库
+node --experimental-strip-types tools/migrate-legacy/src/cli.ts \
+  --from /tmp/huohuo-snapshot.db --to /tmp/trial.db --dry-run
+
+# 3. 正式迁移，结束后自动逐个账号校验凭据
+node --experimental-strip-types tools/migrate-legacy/src/cli.ts \
+  --from /tmp/huohuo-snapshot.db --to ./data/firemail.db --data-dir ./data
+```
+
+校验是**逐字节**的：旧库明文 `refresh_token` 的 sha256，必须和新库密文解密后重算的值完全相同。
+任何一项不符退出码就是 1。迁移全程以只读方式打开旧库，因此随时可以回退。
+
+详细步骤、校验报告怎么读、切换与回退，见 [docs/migration-v1-to-v2.md](docs/migration-v1-to-v2.md)。
+
+## 架构
+
+```
+                        ┌──────────────────────────────────────┐
+   浏览器  ──HTTP──▶     │  Fastify 5                           │
+            SSE   ──▶    │   /api/*      REST + SSE              │
+                        │   /*          SPA 静态资源 + 回退      │
+                        └───────┬──────────────────┬───────────┘
+                                │                  │
+                    ┌───────────▼──────┐   ┌───────▼─────────────┐
+                    │ SQLite           │   │ 同步引擎（同进程）    │
+                    │ better-sqlite3   │◀──│ 定时器 + 有界并发池   │
+                    │ WAL + FTS5       │   └───────┬─────────────┘
+                    └──────────────────┘           │
+                                            IMAP / SMTP / OAuth
+```
+
+pnpm monorepo，Node 22，全 TypeScript ESM：
+
+| 包 | 技术栈 |
+| --- | --- |
+| `apps/server` | Fastify 5 · Drizzle ORM · better-sqlite3 · ImapFlow · Nodemailer · postal-mime · pino |
+| `apps/web` | React 19 · Vite 6 · Tailwind v4 · shadcn/ui · react-router v7 · TanStack Query v5 |
+| `packages/shared` | zod 契约——请求、响应、SSE 事件的唯一定义来源 |
+| `tools/migrate-legacy` | v1 → v2 迁移与校验 CLI |
+
+模块划分、同步引擎、安全边界、数据表的完整说明见 [docs/architecture.md](docs/architecture.md)，
+API 的 50 个端点见 [docs/api.md](docs/api.md)。
+
+## 开发
+
+```bash
+corepack enable
+pnpm install
+
+export FIREMAIL_CORS_ORIGINS=http://localhost:5173   # 见下方说明
+pnpm dev            # server :3000 + web :5173
+```
+
+```bash
+pnpm typecheck      # 全仓库类型检查
+pnpm test           # 全仓库测试
+pnpm build          # shared → web → server
+```
+
+Vite 的代理带 `changeOrigin: true`，服务端看到的 `Host` 是 `localhost:3000`
+而浏览器的 `Origin` 是 `localhost:5173`，不放行这个来源的话 CSRF 校验会拒掉所有写请求。
+
+更多（数据库迁移、目录约定、提交规范、改前端前要读的设计规范）见
+[docs/development.md](docs/development.md)。
+
+## 文档
+
+| | |
+| --- | --- |
+| [部署](docs/deployment.md) | Compose / 单容器、反代、备份、健康检查、升级 |
+| [配置参考](docs/configuration.md) | 全部环境变量的权威列表 |
+| [架构](docs/architecture.md) | 进程模型、同步引擎、安全边界、数据表 |
+| [API 参考](docs/api.md) | 50 个端点、信封、分页、错误码、SSE |
+| [从 v1 迁移](docs/migration-v1-to-v2.md) | 迁移工具、校验口径、切换与回退 |
+| [开发指南](docs/development.md) | 本地起服务、测试、迁移、目录约定 |
+| [设计规范](docs/design/README.md) | 色板、布局、交互、邮件渲染、无障碍 |
+
+## 许可
+
+[Apache License 2.0](LICENSE)。
+
+`backend/` 与 `frontend/` 目录里的 v1 代码来自下方致谢的原项目，同样以 Apache-2.0 分发；
+它们会在 v2 切换完成后从仓库中移除。
+
+## 免责声明
+
+1. 本工具仅用于管理你自己的邮箱账户，请勿用于任何非法用途。
+2. 使用过程中产生的数据安全、账户安全问题，或违反第三方服务条款的行为，由使用者自行承担。
+3. 本项目与 Microsoft、Google、腾讯等邮箱服务提供商没有任何官方关联，使用时请遵守其服务条款。
+4. 邮箱凭据加密后存储在本地数据库中，请自行确保服务器安全；加密主密钥的保管责任在使用者。
+5. 第三方服务的 API 限制或策略变更可能导致功能失效，本项目不保证 100% 的兼容性与可用性。
+6. 本软件按「原样」提供，不提供任何形式的明示或暗示保证。
+
+---
+
+<div align="center">
+
+FireMail 由 [fengyuanluo/firemail](https://github.com/fengyuanluo/firemail) 发展而来，
+感谢原作者的开创性工作。原项目已归档，本仓库是在其之上完成的独立重写。
+
+</div>

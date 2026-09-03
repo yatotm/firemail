@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="FireMail —— 自托管多账号邮件聚合客户端" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>FireMail</title>
+    <script>
+      // 首屏不闪：在第一次绘制前就把主题和密度写到 <html> 上。
+      // 这段必须是同步内联脚本，放进 JS bundle 就晚了。
+      (function () {
+        try {
+          var theme = localStorage.getItem('fm.theme') || 'system';
+          var dark =
+            theme === 'dark' ||
+            (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var root = document.documentElement;
+          root.classList.toggle('dark', dark);
+          root.style.colorScheme = dark ? 'dark' : 'light';
+          root.dataset.density = localStorage.getItem('fm.density') || 'cozy';
+        } catch (error) {
+          // localStorage 不可用时按浅色渲染，不影响功能
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 10 默认禁止依赖执行安装脚本。better-sqlite3 需要 prebuild-install
+# 下载 linuxmusl 预编译的 .node，不放行就会在运行时报 "Could not locate the bindings file"。
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
