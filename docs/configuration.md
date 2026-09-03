@@ -40,7 +40,7 @@ FireMail 的配置只有一个来源：**环境变量**。没有配置文件，�
 | 变量 | 默认值 | 取值 | 说明 |
 | --- | --- | --- | --- |
 | `FIREMAIL_SYNC_SCHEDULER` | `true` | 布尔 | 周期同步总开关。关掉后只能手动触发 `POST /api/accounts/:id/sync`。 |
-| `FIREMAIL_SYNC_CONCURRENCY` | `4` | 1–32 | 同时进行的账号同步数上限。每个账号占一条 IMAP 连接。 |
+| `FIREMAIL_SYNC_CONCURRENCY` | `2` | 1–32 | 同时进行的账号同步数上限，每个账号占一条 IMAP 连接。默认值经 A/B 实测：29 账号 / 5 分钟一轮时，并发 4 的同步失败率 17.7%，并发 2 为 3.0%。账号数量差异较大时值得重新实测。 |
 | `FIREMAIL_SESSION_TTL_DAYS` | `30` | 1–365 | 会话有效期（天）。 |
 | `FIREMAIL_MAX_UPLOAD_MB` | `25` | 1–200 | 单个附件上传上限（MB）。 |
 | `FIREMAIL_SSE_MAX_PER_USER` | `6` | 1–64 | 单用户同时保持的 SSE 事件连接数上限。多标签页各占一条。 |

@@ -125,7 +125,13 @@ const envSchema = z.object({
   }),
 
   FIREMAIL_SESSION_TTL_DAYS: intInRange(30, 1, 365),
-  FIREMAIL_SYNC_CONCURRENCY: intInRange(4, 1, 32),
+  /**
+   * 默认 2 是实测值，不是拍脑袋。29 个 Outlook 账号、每 5 分钟一轮的生产环境下
+   * 做过 A/B：并发 4 时同步失败率 17.7%（n=62，波及 8 个账号），并发 2 降到
+   * 3.0%（n=66，2 个账号）。Outlook 不公布个人邮箱的连接速率上限，只能这样量。
+   * 账号更多或更少时值得重新量一次。
+   */
+  FIREMAIL_SYNC_CONCURRENCY: intInRange(2, 1, 32),
   FIREMAIL_SYNC_SCHEDULER: booleanish(true),
   FIREMAIL_MAX_UPLOAD_MB: intInRange(25, 1, 200),
   FIREMAIL_SSE_MAX_PER_USER: intInRange(6, 1, 64),
