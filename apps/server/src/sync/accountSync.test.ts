@@ -246,60 +246,11 @@ function failingConnect(server: FakeImap, times: number, error: Error) {
   return { connect, get calls() { return calls; } };
 }
 
-/** 退避不真的等：只记录等了多久。 */
-function fakeSleep() {
-  const waits: number[] = [];
-  return { waits, sleep: async (ms: number) => { waits.push(ms); } };
-}
-
-test('限流后退避重试：第三次建连成功，整轮同步照常完成', async () => {
-  const server = new FakeImap({ mailboxes: outlookMailboxes() });
-  const f = fixture(server);
-  const flaky = failingConnect(server, 2, throttleError());
-  const clock = fakeSleep();
-
-  const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account, {
-    sleep: clock.sleep,
-    random: () => 0,
-  });
-
-  assert.equal(result.status, 'ok');
-  assert.equal(result.newMessages, 3);
-  assert.equal(flaky.calls, 3, '默认重试三次（含首次）');
-  assert.equal(clock.waits.length, 2, '每次失败退避一次');
-  assert.ok(clock.waits.every((ms) => ms > 0 && ms <= 15_000), `退避被限制在上限内: ${clock.waits}`);
-  assert.equal(accountRow(f.sqlite, f.account.id).status, 'active');
-  f.close();
-});
-
-test('退避复用 OAuth 层的等量抖动，29 个账号不会齐步重试', async () => {
-  const server = new FakeImap({ mailboxes: outlookMailboxes() });
-  const f = fixture(server);
-  const error = Object.assign(new Error('boom'), { code: 'ECONNRESET' });
-
-  const run = async (random: () => number): Promise<number[]> => {
-    const clock = fakeSleep();
-    await syncAccount({ ...f.deps, connect: failingConnect(server, 2, error).connect }, f.account, {
-      sleep: clock.sleep,
-      random,
-    });
-    return clock.waits;
-  };
-
-  const low = await run(() => 0);
-  const high = await run(() => 0.999);
-
-  assert.deepEqual(low, [500, 1000], '抖动取下界时退避是纯指数的一半');
-  assert.ok(high[0]! > low[0]! && high[1]! > low[1]!, '抖动取上界时更久，两者不相等');
-  f.close();
-});
-
-test('限流耗尽重试：账号状态保持原样，只留 last_error 痕迹', async () => {
+test('被限流：账号状态保持原样，只留 last_error 痕迹', async () => {
   const server = new FakeImap({ mailboxes: [], connectError: throttleError() });
   const f = fixture(server);
-  const clock = fakeSleep();
 
-  const result = await syncAccount(f.deps, f.account, { sleep: clock.sleep, random: () => 0 });
+  const result = await syncAccount(f.deps, f.account);
 
   assert.equal(result.status, 'error');
   assert.equal(result.failureKind, 'throttled');
@@ -319,76 +270,16 @@ test('网络抖动同样不动账号状态', async () => {
   const f = fixture(server);
   f.sqlite.prepare(`UPDATE accounts SET status='active' WHERE id=?`).run(f.account.id);
 
-  const result = await syncAccount(f.deps, f.account, { sleep: async () => {} });
+  const result = await syncAccount(f.deps, f.account);
 
   assert.equal(result.failureKind, 'transient');
   assert.equal(accountRow(f.sqlite, f.account.id).status, 'active');
   f.close();
 });
 
-test('认证失败不重试：一次就走人，不在同一轮里反复撞', async () => {
-  const server = new FakeImap({ mailboxes: [] });
-  const f = fixture(server);
-  const flaky = failingConnect(server, 99, rejectedAfterRefresh());
-  const clock = fakeSleep();
 
-  const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account, {
-    sleep: clock.sleep,
-  });
 
-  assert.equal(result.failureKind, 'auth');
-  assert.equal(flaky.calls, 1, '凭据被拒重试一万次也一样，只会给上游加压');
-  assert.equal(clock.waits.length, 0);
-  f.close();
-});
 
-test('配置类错误不重试，仍然标 error 让人看见', async () => {
-  const server = new FakeImap({ mailboxes: [] });
-  const f = fixture(server);
-  const flaky = failingConnect(server, 99, Object.assign(new Error('getaddrinfo'), { code: 'ENOTFOUND' }));
-
-  const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account, {
-    sleep: async () => {},
-  });
-
-  assert.equal(result.failureKind, 'unknown');
-  assert.equal(flaky.calls, 1);
-  assert.equal(accountRow(f.sqlite, f.account.id).status, 'error');
-  f.close();
-});
-
-test('重试次数可调；调成 1 就是完全不重试', async () => {
-  const server = new FakeImap({ mailboxes: outlookMailboxes() });
-  const f = fixture(server);
-  const flaky = failingConnect(server, 5, throttleError());
-
-  const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account, {
-    connectAttempts: 1,
-    sleep: async () => {},
-  });
-
-  assert.equal(result.status, 'error');
-  assert.equal(flaky.calls, 1);
-  f.close();
-});
-
-test('同步超时期间不再继续重试：退避不能吃掉整轮时限', async () => {
-  const server = new FakeImap({ mailboxes: outlookMailboxes() });
-  const f = fixture(server);
-  const flaky = failingConnect(server, 99, throttleError());
-
-  // sleep 里把时限用光，下一轮循环应当直接放弃
-  const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account, {
-    timeoutMs: 30,
-    sleep: async () => {
-      await delay(60);
-    },
-  });
-
-  assert.equal(result.status, 'error');
-  assert.ok(flaky.calls < 3, `超时后不该继续重试，实际尝试 ${flaky.calls} 次`);
-  f.close();
-});
 
 test('provider 包装过的限流错误同样被认出来（真实链路上 connect 抛的是 ProviderError）', async () => {
   const inner = Object.assign(new Error('Command failed'), {
@@ -401,13 +292,16 @@ test('provider 包装过的限流错误同样被认出来（真实链路上 conn
   const f = fixture(server);
   const flaky = failingConnect(server, 1, new ProviderError('Outlook IMAP 连接失败', inner));
 
-  const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account, {
-    sleep: async () => {},
-  });
+  const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account);
 
-  assert.equal(result.status, 'ok', '重试一次就成功');
-  assert.equal(flaky.calls, 2);
-  assert.equal(accountRow(f.sqlite, f.account.id).status, 'active');
+  assert.equal(result.failureKind, 'throttled', '包了一层 ProviderError 也要认出限流');
+  assert.equal(result.retryAfterMs, null, '这条没带建议退避');
+  assert.equal(flaky.calls, 1, '重试由 sync/attempts.ts 统一负责，这一层只尝试一次');
+  assert.equal(
+    accountRow(f.sqlite, f.account.id).status,
+    'active',
+    '限流不是账号的问题，不能标红',
+  );
   f.close();
 });
 
@@ -456,7 +350,7 @@ async function rounds(
   times: number,
 ): Promise<void> {
   for (let i = 0; i < times; i += 1) {
-    await syncAccount({ ...f.deps, connect, authStrikes: strikes }, f.account, { sleep: async () => {} });
+    await syncAccount({ ...f.deps, connect, authStrikes: strikes }, f.account);
   }
 }
 
@@ -556,7 +450,7 @@ test('TLS 握手失败按网络抖动处理：不动账号状态', async () => {
   });
   const f = fixture(server);
 
-  const result = await syncAccount(f.deps, f.account, { sleep: async () => {} });
+  const result = await syncAccount(f.deps, f.account);
 
   assert.equal(result.failureKind, 'transient');
   const row = accountRow(f.sqlite, f.account.id);
@@ -573,7 +467,7 @@ test('刷新时的网络抖动同样不标红：Microsoft 抽风不是账号坏�
   const server = new FakeImap({ mailboxes: [], connectError: blip });
   const f = fixture(server);
 
-  const result = await syncAccount(f.deps, f.account, { sleep: async () => {} });
+  const result = await syncAccount(f.deps, f.account);
 
   assert.equal(result.failureKind, 'transient');
   assert.equal(accountRow(f.sqlite, f.account.id).status, 'active');

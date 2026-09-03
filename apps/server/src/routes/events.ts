@@ -7,6 +7,25 @@ import { ConnectionLimitError, type SseSink } from '../sse/hub.ts';
 const querySchema = z.object({ ticket: z.string().min(1).optional() });
 
 /**
+ * 事件流的响应头。
+ *
+ * `no-store` 是关键的一条：`no-cache` 只是「用之前先回源验证」，仍然允许缓存**存下**这条响应，
+ * 于是中间层可能对一条永不结束的流发条件请求、拿到 304，而 `EventSource` 收到非 200
+ * 会直接判定失败并重连。永不结束的流没有任何可缓存的语义，只能是 `no-store`。
+ * `no-transform` 挡住代理的压缩与改写（压缩会把 25 秒一次的心跳攒在缓冲区里），
+ * `x-accel-buffering: no` 是 nginx 专用的同一件事。
+ */
+const STREAM_HEADERS = {
+  'content-type': 'text/event-stream; charset=utf-8',
+  'cache-control': 'no-store, no-cache, no-transform',
+  // HTTP/1.0 的老代理只认这两个；生产环境前面就挂着一层看不见的反向代理
+  pragma: 'no-cache',
+  expires: '0',
+  connection: 'keep-alive',
+  'x-accel-buffering': 'no',
+} as const;
+
+/**
  * SSE 事件流。
  *
  * 认证只认一次性票据（`POST /api/auth/sse-ticket` 换取）：`EventSource` 不能设请求头，
@@ -27,16 +46,21 @@ export function registerEventRoutes(app: FastifyInstance, ctx: AppContext): void
     }
 
     reply.hijack();
-    reply.raw.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      // nginx 默认缓冲上游响应，事件会攒到几 KB 才吐出来
-      'x-accel-buffering': 'no',
-    });
+    prepareSocket(reply);
+    reply.raw.writeHead(200, { ...STREAM_HEADERS });
 
     try {
-      ctx.hub.add(userId, toSink(reply));
+      const connection = ctx.hub.add(userId, toSink(reply));
+      // 劫持之后 fastify 不会再跑 onResponse，访问日志里连一行都不会有。
+      // 长连接的开与关必须自己记，否则「流为什么断了」在服务端就是一片空白。
+      const openedAt = Date.now();
+      request.log.info({ userId, connectionId: connection.id }, 'SSE 已连接');
+      reply.raw.on('close', () => {
+        request.log.info(
+          { userId, connectionId: connection.id, durationMs: Date.now() - openedAt },
+          'SSE 已断开',
+        );
+      });
     } catch (error) {
       if (!(error instanceof ConnectionLimitError)) throw error;
       request.log.debug({ userId }, 'SSE 连接数超限');
@@ -44,6 +68,27 @@ export function registerEventRoutes(app: FastifyInstance, ctx: AppContext): void
       reply.raw.end();
     }
   });
+}
+
+/**
+ * 劫持后的 socket 调参。
+ *
+ * `setTimeout(0)` 显式关掉这条连接上的空闲超时：默认（`connectionTimeout: 0`）本来就没有，
+ * 但只要有人给 fastify 加上 `connectionTimeout`，事件流就会被无声掐断，
+ * 而且服务端不会认为那是错误——正是这类问题最难查。
+ * `setKeepAlive` 让内核去探活：客户端断电 / NAT 丢表项时不会有 FIN，
+ * 没有 TCP keepalive 的话这条连接会一直挂在注册表里，占着每用户 6 条的名额。
+ */
+function prepareSocket(reply: FastifyReply): void {
+  // 注入式测试里的 raw 不是真 socket，缺方法很正常；调参失败绝不能拖垮连接
+  const socket = reply.raw.socket as Partial<NonNullable<FastifyReply['raw']['socket']>> | null;
+  try {
+    socket?.setTimeout?.(0);
+    socket?.setNoDelay?.(true);
+    socket?.setKeepAlive?.(true, 30_000);
+  } catch {
+    /* 调不了就算了，默认值本来也是可用的 */
+  }
 }
 
 /** 把 `reply.raw` 收窄成 hub 需要的最小接口，方便测试注入假 sink。 */

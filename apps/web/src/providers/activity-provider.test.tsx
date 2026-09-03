@@ -55,11 +55,11 @@ function renderProvider(status: SseStatus = 'open') {
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
 
-  const wrapper = (children: ReactNode) => (
+  const wrapper = (children: ReactNode, current: SseStatus) => (
     <MemoryRouter>
       <QueryClientProvider client={client}>
         <LiveRegionProvider>
-          <ServerEventsContext value={sse.value}>
+          <ServerEventsContext value={{ ...sse.value, status: current }}>
             <ActivityProvider>{children}</ActivityProvider>
           </ServerEventsContext>
         </LiveRegionProvider>
@@ -67,8 +67,13 @@ function renderProvider(status: SseStatus = 'open') {
     </MemoryRouter>
   );
 
-  render(wrapper(<Probe />));
-  return { ...sse, client };
+  const view = render(wrapper(<Probe />, status));
+  return {
+    ...sse,
+    client,
+    /** 模拟连接状态变化：SSE 断了 / 又回来了。 */
+    setStatus: (next: SseStatus) => view.rerender(wrapper(<Probe />, next)),
+  };
 }
 
 function entryTexts(): (string | null)[] {
@@ -181,6 +186,31 @@ describe('活动中心', () => {
     });
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['accounts'] });
+  });
+
+  it('断线标成未知、恢复后自动清掉，横幅也跟着消失', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { setStatus } = renderProvider('open');
+
+    await user.click(screen.getByRole('button', { name: '开始同步' }));
+    expect(screen.getByTestId('connected')).toHaveTextContent('true');
+
+    setStatus('reconnecting');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVITY_STALE_AFTER_MS + 6_000);
+    });
+    expect(screen.getByTestId('connected')).toHaveTextContent('false');
+    expect(entryTexts()).toEqual(['sync/1/stale/']);
+
+    // 恢复：重连时已经做过一次全量 invalidate，「状态未知」不该再挂着
+    setStatus('open');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(screen.getByTestId('connected')).toHaveTextContent('true');
+    expect(entryTexts()).toEqual([]);
+    expect(screen.getByTestId('pending')).toHaveTextContent('0');
   });
 
   it('SSE 连着的时候不轮询，也不把进行中的记录标成未知', async () => {

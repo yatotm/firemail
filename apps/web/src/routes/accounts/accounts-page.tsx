@@ -1,11 +1,19 @@
 import type { Account } from '@firemail/shared';
-import { CheckCircle2Icon, ImportIcon, PlusIcon, SearchXIcon, UsersIcon } from 'lucide-react';
+import {
+  CheckCircle2Icon,
+  ImportIcon,
+  KeyRoundIcon,
+  PlusIcon,
+  SearchXIcon,
+  UsersIcon,
+} from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { AccountsTable } from '@/components/accounts/accounts-table';
 import { AccountsToolbar } from '@/components/accounts/accounts-toolbar';
 import { BulkActionBar } from '@/components/accounts/bulk-action-bar';
+import { ExportCredentialsDialog } from '@/components/accounts/export-credentials-dialog';
 import { HealthStats } from '@/components/accounts/health-stats';
 import { ConfirmDialog } from '@/components/common/confirm-dialog';
 import { EmptyState } from '@/components/common/empty-state';
@@ -16,6 +24,7 @@ import { useAccountActions } from '@/hooks/accounts/use-account-actions';
 import { useAccountFilters } from '@/hooks/accounts/use-account-filters';
 import { useAccountEditor } from '@/hooks/accounts/use-account-editor';
 import { useAccounts } from '@/hooks/use-accounts';
+import { useAuth } from '@/hooks/use-auth';
 import { useRegisterCommands } from '@/hooks/use-commands';
 import { useServerEvent, useServerEvents } from '@/hooks/use-server-events';
 import { useShortcuts, useShortcutScope } from '@/hooks/use-shortcuts';
@@ -53,9 +62,12 @@ export function AccountsPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const { user } = useAuth();
+
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(() => new Set());
   const [focusedId, setFocusedId] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Account[]>([]);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef(new Map<number, HTMLButtonElement>());
@@ -259,6 +271,13 @@ export function AccountsPage() {
           <ImportIcon aria-hidden />
           批量导入
         </Button>
+        {/* 备份是管理员操作：一次导出等于把全部邮箱的访问权装进一个文件 */}
+        {user?.isAdmin ? (
+          <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
+            <KeyRoundIcon aria-hidden />
+            导出凭据
+          </Button>
+        ) : null}
       </header>
 
       {accountsQuery.isError ? (
@@ -283,7 +302,7 @@ export function AccountsPage() {
             onFilterChange={setFilters}
             onSyncAll={() => actions.syncNow(syncableAccounts(accounts))}
             syncing={actions.isSyncing || syncingAccountIds.size > 0}
-            syncProgress={actions.syncProgress}
+            syncingCount={syncingAccountIds.size}
             searchRef={searchRef}
           />
 
@@ -365,6 +384,8 @@ export function AccountsPage() {
           });
         }}
       />
+
+      <ExportCredentialsDialog open={exportOpen} onOpenChange={setExportOpen} accounts={accounts} />
 
       <Outlet
         context={

@@ -98,6 +98,12 @@ export function settle(entries: readonly ActivityEntry[], input: SettleInput): A
  * 时间推进：清掉过期的完成记录；SSE 不通时把久等无果的 running 记录标成 stale。
  * stale ≠ 失败：它明确表示「连接断了，这个操作的结果我们不知道」，
  * 比继续转圈假装一切正常诚实得多。
+ *
+ * 两条对称的规则，缺一不可：
+ *  - 转 stale 时**必须**写上 `endedAt`，否则它永远不满足 TTL 清理条件，
+ *    角标会一直亮着「N 个进行中」，降级轮询也会一直跑下去；
+ *  - 连接恢复后 stale 记录要清掉：重连时已经做过一次全量 invalidate，
+ *    真实状态就在页面上，再留一条「状态未知」反而是新的误导。
  */
 export function tick(
   entries: readonly ActivityEntry[],
@@ -108,12 +114,13 @@ export function tick(
 
   for (const entry of entries) {
     if (entry.endedAt !== undefined && now - entry.endedAt > ACTIVITY_TTL_MS) continue;
+    if (connected && entry.status === 'stale') continue;
     if (
       !connected &&
       entry.status === 'running' &&
       now - entry.startedAt > ACTIVITY_STALE_AFTER_MS
     ) {
-      next.push({ ...entry, status: 'stale' });
+      next.push({ ...entry, status: 'stale', endedAt: now });
       continue;
     }
     next.push(entry);

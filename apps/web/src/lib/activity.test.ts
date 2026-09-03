@@ -110,6 +110,26 @@ describe('活动记录：时间推进', () => {
     expect(unresolvedCount(entries)).toBe(1);
   });
 
+  it('转 stale 时写上 endedAt，否则这条记录永远等不到 TTL 清理', () => {
+    const now = T0 + ACTIVITY_STALE_AFTER_MS + 1;
+    const stale = tick([running()], { now, connected: false });
+    expect(stale[0]?.endedAt).toBe(now);
+
+    // 一直断着也不能让角标永远亮着
+    const aged = tick(stale, { now: now + ACTIVITY_TTL_MS + 1, connected: false });
+    expect(aged).toEqual([]);
+    expect(unresolvedCount(aged)).toBe(0);
+  });
+
+  it('连接恢复后清掉 stale 记录 —— 重连时已经全量刷过，真实状态就在页面上', () => {
+    const stale = tick([running()], { now: T0 + ACTIVITY_STALE_AFTER_MS + 1, connected: false });
+    expect(stale[0]?.status).toBe('stale');
+
+    const recovered = tick(stale, { now: T0 + ACTIVITY_STALE_AFTER_MS + 2, connected: true });
+    expect(recovered).toEqual([]);
+    expect(unresolvedCount(recovered)).toBe(0);
+  });
+
   it('SSE 连着的时候不标 stale —— 事件迟早会来', () => {
     const entries = tick([running()], { now: T0 + 10 * ACTIVITY_STALE_AFTER_MS, connected: true });
     expect(entries[0]?.status).toBe('running');

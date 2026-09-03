@@ -32,9 +32,11 @@ export interface SseClientOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   /**
-   * 这么久没有任何**事件**就判定连接已死并重连；`0` 表示关闭该检测。
-   * 注意服务端的心跳是 `: ping` 注释帧，EventSource 根本不会把它暴露出来，
-   * 所以在事件稀疏的部署里应该关掉它，靠 `onerror` 和可见性变化来兜底。
+   * 这么久收不到任何帧（业务事件或 `ping` 心跳）就判定连接已死并重连；`0` 表示关闭该检测。
+   *
+   * 这个检测不能关：链路被 NAT / 反向代理静默掐断时不会有 `onerror`，
+   * `EventSource` 会一直停在 OPEN 上，UI 显示「已连接」却再也收不到东西。
+   * 服务端每 25 秒发一个**具名** `ping` 事件，所以这里只要给它留够两三个周期即可。
    */
   heartbeatTimeoutMs?: number;
   random?: () => number;
@@ -43,6 +45,16 @@ export interface SseClientOptions {
 }
 
 const JITTER = 0.2;
+
+/** 服务端心跳周期 25 秒；留够约 3 个周期，网络抖一下不会误判成断线。 */
+export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 75_000;
+
+/**
+ * 服务端心跳的事件名，与 `apps/server/src/sse/hub.ts` 的 `PING_EVENT` 一一对应。
+ * 它**不**在 `serverEventSchema` 里：那是传输层的存活信号，不是业务事件。
+ * 两边各有一条断言把这个字面量钉住，任何一侧改名都会立刻测试失败。
+ */
+const PING_EVENT = 'ping';
 
 /** 服务端发的是具名事件（`event: sync:done`），必须逐个 addEventListener，onmessage 收不到。 */
 const EVENT_TYPES: ServerEventType[] = [...serverEventSchema.optionsMap.keys()].filter(
@@ -62,6 +74,8 @@ export class SseClient {
   private generation = 0;
   private everConnected = false;
   private stopped = true;
+  /** 取票 → 建连接这段窗口。期间再来的重连请求要被吞掉，否则会白白烧掉一张一次性票。 */
+  private connecting = false;
   private currentStatus: SseStatus = 'idle';
 
   constructor(options: SseClientOptions) {
@@ -69,7 +83,7 @@ export class SseClient {
       create: (url) => new EventSource(url, { withCredentials: true }),
       baseDelayMs: 1000,
       maxDelayMs: 30_000,
-      heartbeatTimeoutMs: 0,
+      heartbeatTimeoutMs: DEFAULT_HEARTBEAT_TIMEOUT_MS,
       random: Math.random,
       setTimer: (fn, ms) => globalThis.setTimeout(fn, ms) as unknown as number,
       clearTimer: (handle) => globalThis.clearTimeout(handle),
@@ -98,25 +112,31 @@ export class SseClient {
   stop(): void {
     this.stopped = true;
     this.generation++;
+    this.connecting = false;
     this.clearTimers();
     this.closeSource();
     this.setStatus('closed');
   }
 
   private connect(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.connecting) return;
+    this.connecting = true;
     this.setStatus(this.everConnected ? 'reconnecting' : 'connecting');
 
     const generation = this.generation;
     const { url } = this.options;
 
+    // 一次连接 = 一次取票。票是一次性的，重复取等于把 30 秒的凭据白扔在网络上，
+    // 所以这里绝不能有第二条并发路径（见 `connecting`）。
     void Promise.resolve(typeof url === 'function' ? url() : url)
       .then((resolved) => {
+        this.connecting = false;
         // 取票期间可能已经 stop() 或者又发起了一轮连接
         if (this.stopped || generation !== this.generation) return;
         this.attach(this.options.create(resolved));
       })
       .catch(() => {
+        this.connecting = false;
         if (this.stopped || generation !== this.generation) return;
         this.scheduleReconnect();
       });
@@ -139,7 +159,8 @@ export class SseClient {
     for (const type of EVENT_TYPES) {
       source.addEventListener?.(type, (event) => this.receive(event.data));
     }
-    source.addEventListener?.('ping', () => this.armHeartbeat());
+    // 心跳只负责证明「链路还活着」，不进业务事件流
+    source.addEventListener?.(PING_EVENT, () => this.armHeartbeat());
 
     source.onerror = () => this.scheduleReconnect();
   }
@@ -162,8 +183,12 @@ export class SseClient {
     this.options.onUnknownEvent?.(payload);
   }
 
+  /**
+   * 排一次重连。`onerror` 与心跳超时可能几乎同时触发同一次断线，
+   * 已经排了队或者正在取票时必须直接返回：否则一次断线会烧掉两张票、开两条连接。
+   */
   private scheduleReconnect(): void {
-    if (this.stopped || this.reconnectTimer !== null) return;
+    if (this.stopped || this.reconnectTimer !== null || this.connecting) return;
     if (this.heartbeatTimer !== null) {
       this.options.clearTimer(this.heartbeatTimer);
       this.heartbeatTimer = null;

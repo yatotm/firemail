@@ -51,7 +51,19 @@ async function main(): Promise<void> {
 
   if (config.syncSchedulerEnabled) {
     ctx.scheduler.start();
-    app.log.info({ concurrency: config.syncConcurrency }, '周期同步已启动');
+    app.log.info(
+      {
+        // 后台基线是串行的，concurrency 只管用户发起的批量 / 单账号同步
+        background: { serial: true, gapMs: config.syncGapMs, budgetMs: config.syncAccountBudgetMs },
+        userInitiatedConcurrency: config.syncConcurrency,
+        maxAttempts: config.syncMaxAttempts,
+        suspend: {
+          afterRounds: config.syncSuspendAfterRounds,
+          enforce: config.syncSuspendEnforce,
+        },
+      },
+      '三层同步调度已启动',
+    );
   } else {
     app.log.warn('周期同步被 FIREMAIL_SYNC_SCHEDULER=false 关闭');
   }

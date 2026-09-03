@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ServerEvent } from '@firemail/shared';
-import { ConnectionLimitError, SseHub, toFrame, type SseSink } from './hub.ts';
+import { ConnectionLimitError, PING_EVENT, SseHub, toFrame, type SseSink } from './hub.ts';
 
 /**
  * SSE 连接注册表。
  *
- * 三条硬要求：写失败不能崩（上游最近一次提交修的就是这个）、
- * 高频事件必须合并（500 封同步不能产生 500 个事件）、每用户连接数封顶。
+ * 四条硬要求：写失败不能崩（上游最近一次提交修的就是这个）、
+ * 高频事件必须合并（500 封同步不能产生 500 个事件）、每用户连接数封顶、
+ * 心跳必须是浏览器 JS 看得见的具名事件。
  */
 
 interface FakeSink extends SseSink {
@@ -45,16 +46,23 @@ function fakeSink(): FakeSink {
 
 function dataFrames(sink: FakeSink): ServerEvent[] {
   return sink.frames
-    .filter((f) => f.startsWith('event: '))
+    .filter((f) => f.startsWith('event: ') && !f.startsWith(`event: ${PING_EVENT}\n`))
     .map((f) => JSON.parse(f.split('\n')[1]?.slice(6) ?? '{}') as ServerEvent);
 }
 
-test('连接后立刻发一帧注释，避免代理缓冲首个事件', () => {
-  const hub = new SseHub();
+function pingCount(sink: FakeSink): number {
+  return sink.frames.filter((f) => f.includes(`event: ${PING_EVENT}\n`)).length;
+}
+
+test('前导帧：retry 提示 + 注释帧防缓冲 + 立刻一次心跳', () => {
+  const hub = new SseHub({ retryHintMs: 4321 });
   const sink = fakeSink();
   hub.add(1, sink);
 
-  assert.equal(sink.frames[0], ': connected\n\n');
+  const preamble = sink.frames[0] ?? '';
+  assert.match(preamble, /^retry: 4321\n\n/, '原生 EventSource 需要一个重连间隔兜底');
+  assert.match(preamble, /: connected\n\n/, '注释帧让代理层认定响应已开始');
+  assert.match(preamble, /event: ping\ndata: /, '第一帧心跳不能让客户端空等一个周期');
   assert.equal(hub.size, 1);
   assert.equal(hub.countFor(1), 1);
   hub.closeAll();
@@ -79,13 +87,30 @@ test('帧格式是 `event:` + `data:` 双行，JSON 可解析', () => {
   assert.equal(frame, 'event: sync:done\ndata: {"type":"sync:done","accountId":3,"newMessages":12}\n\n');
 });
 
-test('心跳发注释帧', () => {
-  const hub = new SseHub({ heartbeatMs: 0 });
+test('心跳是具名事件，不是注释帧 —— 注释帧浏览器 JS 永远看不见', () => {
+  const hub = new SseHub({ heartbeatMs: 0, now: () => 1_700_000_000_000 });
   const sink = fakeSink();
   hub.add(1, sink);
 
   hub.heartbeat();
-  assert.equal(sink.frames.at(-1), ': ping\n\n');
+  assert.equal(sink.frames.at(-1), 'event: ping\ndata: {"t":1700000000000}\n\n');
+  hub.closeAll();
+});
+
+test('心跳按 heartbeatMs 定时发出，且第一个连接就把它启动起来', async () => {
+  const hub = new SseHub({ heartbeatMs: 20 });
+  const sink = fakeSink();
+  hub.add(1, sink);
+  assert.equal(pingCount(sink), 1, '前导帧里已经有一次');
+
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.ok(pingCount(sink) >= 3, `70ms / 20ms 至少应有 3 次心跳，实际 ${pingCount(sink)}`);
+
+  // 全部断开之后定时器要停掉，不能空转
+  sink.emitClose();
+  const idle = pingCount(sink);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(pingCount(sink), idle);
   hub.closeAll();
 });
 

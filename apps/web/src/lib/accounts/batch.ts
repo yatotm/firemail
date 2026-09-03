@@ -7,8 +7,6 @@ export const DEFAULT_CONCURRENCY = 4;
 
 export interface BatchOptions {
   concurrency?: number;
-  /** 每完成一个回调一次，用来画 `同步中 4/29` 的进度条。 */
-  onProgress?: (done: number, total: number) => void;
 }
 
 export interface BatchOutcome<T> {
@@ -26,7 +24,6 @@ export async function runBatch<I, O>(
   const outcome: BatchOutcome<O> = { fulfilled: [], rejected: [] };
 
   let cursor = 0;
-  let done = 0;
 
   async function pump(): Promise<void> {
     while (cursor < total) {
@@ -38,8 +35,6 @@ export async function runBatch<I, O>(
       } catch (error) {
         outcome.rejected.push(error);
       }
-      done += 1;
-      options.onProgress?.(done, total);
     }
   }
 

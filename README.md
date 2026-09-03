@@ -163,14 +163,15 @@ docker run -d \
 | `FIREMAIL_ENCRYPTION_KEY` | 自动生成 | 凭据主密钥，32 字节的 hex 或 base64。见上方警告 |
 | `FIREMAIL_DATA_DIR` | 镜像内 `/app/data` | 数据目录：密钥文件与附件 |
 | `FIREMAIL_DB_PATH` | `<数据目录>/firemail.db` | SQLite 路径 |
-| `FIREMAIL_SYNC_CONCURRENCY` | `4` | 同时同步的账号数上限（1–32） |
+| `FIREMAIL_SYNC_CONCURRENCY` | `2` | **用户发起的**同步（「全部同步」/ 单账号）的并发上限（1–32）。后台同步按定义是串行的 |
 | `FIREMAIL_SYNC_SCHEDULER` | `true` | 周期同步总开关 |
+| `FIREMAIL_SYNC_MAX_ATTEMPTS` | `3` | 每个账号每轮的尝试次数（含首次，1–5） |
 | `FIREMAIL_CORS_ORIGINS` | 空 | 跨源白名单，逗号分隔。**不接受 `*`** |
 | `FIREMAIL_TRUST_PROXY` | `false` | 在反向代理后面时打开 |
 | `FIREMAIL_MAX_UPLOAD_MB` | `25` | 单附件上传上限（1–200） |
 | `LOG_LEVEL` | `info` | pino 日志级别 |
 
-还有 8 个不常改的（会话有效期、SSE 连接数上限、停机宽限期等），
+还有 10 个不常改的（后台同步的账号间隔与时间预算、自动暂停门槛、会话有效期、SSE 连接数上限、停机宽限期等），
 完整的权威列表、取值范围与失败表现见 [docs/configuration.md](docs/configuration.md)。
 
 > Compose 的 `.env` 只做变量替换，**不会自动把变量注入容器**。目前 `docker-compose.yml`
@@ -212,7 +213,7 @@ node --experimental-strip-types tools/migrate-legacy/src/cli.ts \
                                 │                  │
                     ┌───────────▼──────┐   ┌───────▼─────────────┐
                     │ SQLite           │   │ 同步引擎（同进程）    │
-                    │ better-sqlite3   │◀──│ 定时器 + 有界并发池   │
+                    │ better-sqlite3   │◀──│ 三层调度 + 有界并发池 │
                     │ WAL + FTS5       │   └───────┬─────────────┘
                     └──────────────────┘           │
                                             IMAP / SMTP / OAuth

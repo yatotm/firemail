@@ -1,4 +1,12 @@
-/** 有界信号量：29 个账号不会同时开 29 条 IMAP 连接。 */
+/**
+ * 有界信号量：29 个账号不会同时开 29 条 IMAP 连接。
+ *
+ * 这是**跨层级**的总闸门：后台基线、批量同步、单账号同步共用同一个池子，
+ * 因此「同时有几条 IMAP 连接打向上游」这件事只有一个答案，和谁发起的无关。
+ *
+ * 等待队列支持插队：用户正在等的那个账号（interactive 层）排在批量任务前面。
+ * 没有插队的话，「立即同步」这个动作在一轮 29 个账号的批量同步面前毫无优先级可言。
+ */
 export class Semaphore {
   readonly limit: number;
   #active = 0;
@@ -19,8 +27,8 @@ export class Semaphore {
     return this.#waiting.length;
   }
 
-  async run<T>(task: () => Promise<T>): Promise<T> {
-    await this.#acquire();
+  async run<T>(task: () => Promise<T>, options: { priority?: boolean } = {}): Promise<T> {
+    await this.#acquire(options.priority === true);
     try {
       return await task();
     } finally {
@@ -28,12 +36,15 @@ export class Semaphore {
     }
   }
 
-  async #acquire(): Promise<void> {
+  async #acquire(priority: boolean): Promise<void> {
     if (this.#active < this.limit) {
       this.#active += 1;
       return;
     }
-    await new Promise<void>((resolve) => this.#waiting.push(resolve));
+    await new Promise<void>((resolve) => {
+      if (priority) this.#waiting.unshift(resolve);
+      else this.#waiting.push(resolve);
+    });
     this.#active += 1;
   }
 

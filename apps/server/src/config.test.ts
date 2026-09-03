@@ -119,6 +119,32 @@ test('数值型变量有范围限制', () => {
   assert.throws(() => loadConfig({ FIREMAIL_SESSION_TTL_DAYS: '0' }), ConfigError);
 });
 
+test('三层同步的旋钮：重试、间隔、预算、升级门槛', () => {
+  const defaults = loadConfig({});
+  assert.equal(defaults.syncConcurrency, 2, '并发默认值来自生产 A/B 实测');
+  assert.equal(defaults.syncMaxAttempts, 3);
+  assert.equal(defaults.syncGapMs, 2_000);
+  assert.equal(defaults.syncAccountBudgetMs, 90_000);
+  assert.equal(defaults.syncSuspendAfterRounds, 8);
+  assert.equal(defaults.syncSuspendEnforce, false, '自动暂停默认只观察不执行');
+
+  assert.equal(loadConfig({ FIREMAIL_SYNC_MAX_ATTEMPTS: '1' }).syncMaxAttempts, 1);
+  assert.throws(() => loadConfig({ FIREMAIL_SYNC_MAX_ATTEMPTS: '0' }), ConfigError);
+  assert.throws(() => loadConfig({ FIREMAIL_SYNC_MAX_ATTEMPTS: '6' }), ConfigError);
+
+  assert.equal(loadConfig({ FIREMAIL_SYNC_GAP_MS: '0' }).syncGapMs, 0);
+  assert.equal(loadConfig({ FIREMAIL_SYNC_ACCOUNT_BUDGET_MS: '30000' }).syncAccountBudgetMs, 30_000);
+  assert.throws(() => loadConfig({ FIREMAIL_SYNC_ACCOUNT_BUDGET_MS: '1000' }), ConfigError);
+
+  assert.equal(loadConfig({ FIREMAIL_SYNC_SUSPEND_AFTER_ROUNDS: '3' }).syncSuspendAfterRounds, 3);
+  assert.throws(
+    () => loadConfig({ FIREMAIL_SYNC_SUSPEND_AFTER_ROUNDS: '1' }),
+    ConfigError,
+    '一轮失败不算「反复失败」，门槛最小是 2',
+  );
+  assert.equal(loadConfig({ FIREMAIL_SYNC_SUSPEND_ENFORCE: 'true' }).syncSuspendEnforce, true);
+});
+
 test('日志级别只接受 pino 认识的取值', () => {
   assert.equal(loadConfig({ LOG_LEVEL: 'debug' }).logLevel, 'debug');
   assert.throws(() => loadConfig({ LOG_LEVEL: 'verbose' }), ConfigError);

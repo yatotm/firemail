@@ -126,13 +126,30 @@ const envSchema = z.object({
 
   FIREMAIL_SESSION_TTL_DAYS: intInRange(30, 1, 365),
   /**
+   * **用户发起的**同步（「全部同步」与单账号「立即同步」）的并发上限。
+   * 后台基线按定义是串行的，不受它影响。
+   *
    * 默认 2 是实测值，不是拍脑袋。29 个 Outlook 账号、每 5 分钟一轮的生产环境下
    * 做过 A/B：并发 4 时同步失败率 17.7%（n=62，波及 8 个账号），并发 2 降到
-   * 3.0%（n=66，2 个账号）。Outlook 不公布个人邮箱的连接速率上限，只能这样量。
-   * 账号更多或更少时值得重新量一次。
+   * 3.0%（n=66，2 个账号），部署后在 2 上复测为 2.2%（n=45，0 个账号）。
+   * 外推显示串行（并发 1）应当趋近于零——后台基线改成串行正是这条外推的兑现。
+   * Outlook 不公布个人邮箱的连接速率上限，只能这样量；账号数差异较大时值得重量一次。
    */
   FIREMAIL_SYNC_CONCURRENCY: intInRange(2, 1, 32),
   FIREMAIL_SYNC_SCHEDULER: booleanish(true),
+  /** 每个账号每轮的尝试次数（含首次）。三层共用。 */
+  FIREMAIL_SYNC_MAX_ATTEMPTS: intInRange(3, 1, 5),
+  /** 后台基线里两个账号之间的间隔（毫秒）。 */
+  FIREMAIL_SYNC_GAP_MS: intInRange(2_000, 0, 60_000),
+  /** 后台基线中单个账号一轮的总时间预算（毫秒），覆盖它的全部尝试与退避。 */
+  FIREMAIL_SYNC_ACCOUNT_BUDGET_MS: intInRange(90_000, 5_000, 600_000),
+  /** 连续失败多少轮之后判定「该停掉这个账号了」。最小 2。 */
+  FIREMAIL_SYNC_SUSPEND_AFTER_ROUNDS: intInRange(8, 2, 100),
+  /**
+   * false（默认）= 只观察不执行：判定照常记录、照常展示，但账号继续同步。
+   * 门槛还没有真实数据支撑（见 docs/configuration.md），先收集再开闸。
+   */
+  FIREMAIL_SYNC_SUSPEND_ENFORCE: booleanish(false),
   FIREMAIL_MAX_UPLOAD_MB: intInRange(25, 1, 200),
   FIREMAIL_SSE_MAX_PER_USER: intInRange(6, 1, 64),
   FIREMAIL_SHUTDOWN_TIMEOUT_MS: intInRange(15_000, 1_000, 120_000),
@@ -158,6 +175,11 @@ export interface AppConfig {
   sessionTtlMs: number;
   syncConcurrency: number;
   syncSchedulerEnabled: boolean;
+  syncMaxAttempts: number;
+  syncGapMs: number;
+  syncAccountBudgetMs: number;
+  syncSuspendAfterRounds: number;
+  syncSuspendEnforce: boolean;
   maxUploadBytes: number;
   sseMaxPerUser: number;
   shutdownTimeoutMs: number;
@@ -194,6 +216,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionTtlMs: e.FIREMAIL_SESSION_TTL_DAYS * DAY_MS,
     syncConcurrency: e.FIREMAIL_SYNC_CONCURRENCY,
     syncSchedulerEnabled: e.FIREMAIL_SYNC_SCHEDULER,
+    syncMaxAttempts: e.FIREMAIL_SYNC_MAX_ATTEMPTS,
+    syncGapMs: e.FIREMAIL_SYNC_GAP_MS,
+    syncAccountBudgetMs: e.FIREMAIL_SYNC_ACCOUNT_BUDGET_MS,
+    syncSuspendAfterRounds: e.FIREMAIL_SYNC_SUSPEND_AFTER_ROUNDS,
+    syncSuspendEnforce: e.FIREMAIL_SYNC_SUSPEND_ENFORCE,
     maxUploadBytes: e.FIREMAIL_MAX_UPLOAD_MB * 1024 * 1024,
     sseMaxPerUser: e.FIREMAIL_SSE_MAX_PER_USER,
     shutdownTimeoutMs: e.FIREMAIL_SHUTDOWN_TIMEOUT_MS,

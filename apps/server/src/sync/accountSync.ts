@@ -1,14 +1,12 @@
 import { eq } from 'drizzle-orm';
-import { computeBackoffMs } from '../auth/oauth/errors.ts';
 import { accounts, syncRuns } from '../db/schema.ts';
 import {
   classifyMailFailure,
   credentialsWereResolved,
-  isRetryableFailure,
   type MailFailureKind,
 } from '../providers/failures.ts';
 import { AuthStrikes } from './authStrikes.ts';
-import { sleep, withTimeout } from './concurrency.ts';
+import { withTimeout } from './concurrency.ts';
 import { syncFolder, throwIfAborted, type FolderSyncOptions } from './folderSync.ts';
 import { syncFolders } from './folders.ts';
 import {
@@ -27,40 +25,32 @@ import {
  */
 export const DEFAULT_ACCOUNT_TIMEOUT_MS = 120_000;
 
-/**
- * 建连的重试次数（含首次）。
- *
- * 上游限流是**瞬时**的：实测被拒的账号在下一个 5 分钟周期就自行恢复。
- * 3 次已经覆盖了这种抖动；再多只是在服务端说「慢点」的时候继续加压。
- */
-export const DEFAULT_CONNECT_ATTEMPTS = 3;
-
-/**
- * 退避参数，复用 OAuth 层的 `computeBackoffMs`（指数 + 等量抖动），
- * 29 个账号同时被限流时不会保持同步、整齐划一地再撞一次。
- *
- * 上限取 15 秒而不是 OAuth 那边的 60 秒：账号同步自己只有 120 秒时限，
- * 而 `ETHROTTLE` 携带的服务端建议退避动辄 60~90 秒（imapflow 在拒绝之前
- * 其实已经替我们等过一轮了），照单全收会把整轮同步的预算耗在等待上。
- * 剩下的等待由调度器的「每账号冷却」承担——那才是可以长时间等的地方。
- */
-export const CONNECT_BACKOFF_BASE_MS = 1_000;
-export const CONNECT_BACKOFF_MAX_MS = 15_000;
-
 export interface AccountSyncOptions extends Omit<FolderSyncOptions, 'signal'> {
   /** 只同步这些路径；不传则同步全部可选中的文件夹。 */
   folderPaths?: string[];
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** 建连尝试次数（含首次）。 */
-  connectAttempts?: number;
-  /** 注入点：测试用来跳过真实等待。 */
-  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-  random?: () => number;
+  /**
+   * true = 这次只是一轮里的一次尝试，失败**不要**写账号健康度。
+   *
+   * 中途的一次失败不是失败：它既不该让界面变红，也不该给认证连续失败计数加一
+   * （否则一轮 3 次尝试就顶掉 3 轮，`DEFAULT_AUTH_STRIKE_THRESHOLD` 的标定直接失效）。
+   * 成功不受影响——一旦真的同步成功了，就该立刻落库、立刻清零。
+   * 由调用方在一轮结束后用 `recordSyncFailure` 统一裁决。
+   */
+  deferFailure?: boolean;
 }
 
 /**
- * 同步一个账号的全部文件夹。
+ * 同步一个账号的全部文件夹。**只尝试一次**。
+ *
+ * 重试不在这里：曾经有过一个只重试 `throttled`/`transient` 的建连重试循环，
+ * 现在由 `sync/attempts.ts` 统一负责，原因有二——
+ *  1. 最该重试的那一类恰恰不可判定：Outlook 限流常以一条光秃秃的
+ *     `AUTHENTICATIONFAILED` 出现，`isRetryableFailure` 会把它判成不可重试；
+ *  2. 两层重试会相乘（3 × 3 = 9 次建连），正好是被限流时最不该做的事。
+ * 一个重试权威，一份退避曲线，一份预算。
+ *
  * 单个文件夹失败只记录、不中断其余文件夹——一个坏掉的 Notes 目录
  * 不该让 INBOX 收不到信。
  */
@@ -83,7 +73,7 @@ export async function syncAccount(
 
   try {
     throwIfAborted(signal);
-    client = await connectWithRetry(deps, account, signal, options);
+    client = await deps.connect(account);
 
     const listed = await syncFolders(deps.db, account.id, client);
     const wanted = options.folderPaths && new Set(options.folderPaths);
@@ -111,13 +101,14 @@ export async function syncAccount(
 
   const newMessages = results.reduce((sum, folder) => sum + folder.newMessages, 0);
   const error = failure == null ? null : describe(failure);
-  const failureKind = failure == null ? null : classifyMailFailure(failure).kind;
+  const classified = failure == null ? null : classifyMailFailure(failure);
   const finishedAt = Date.now();
 
+  // sync_runs 每次尝试都照常开、照常关：它是内部日志，不是给用户看的状态，
+  // 每一次尝试都是一次真实的尝试，都该留痕，且绝不留下没有 finished_at 的悬空行。
   closeSyncRun(deps, runId, { finishedAt, newMessages, error });
-  updateAccountHealth(deps, account, { finishedAt, error, failureKind, cause: failure });
 
-  return {
+  const result: AccountSyncResult = {
     accountId: account.id,
     runId,
     status: error == null ? 'ok' : 'error',
@@ -126,50 +117,46 @@ export async function syncAccount(
     error,
     startedAt,
     finishedAt,
-    failureKind,
+    failureKind: classified?.kind ?? null,
+    retryAfterMs: classified?.retryAfterMs ?? null,
+    credentialsResolved: failure != null && credentialsWereResolved(failure),
   };
+
+  // 成功永远立刻落库；失败可以推迟到一轮重试全部用完之后再裁决。
+  if (error === null || options.deferFailure !== true) {
+    updateAccountHealth(deps, account, { finishedAt, error, failureKind: result.failureKind, cause: failure });
+  }
+  return result;
 }
 
 /**
- * 建连失败的有界重试。
+ * 一轮重试全部用完之后，补记那次失败。
  *
- * 只重试限流和网络抖动：凭据被拒、主机写错这类错误重试一万次也一样，
- * 白白占着并发名额还给上游加压。
+ * 与 `syncAccount` 内联的那次调用走完全相同的路径——认证连续失败计数、
+ * 「凭据是不是已经到手」的判定、status/lastError 的写法都是同一套，
+ * 区别只在于「什么时候算数」：一轮一次，而不是一次尝试一次。
  */
-async function connectWithRetry(
+export function recordSyncFailure(
   deps: SyncDeps,
   account: AccountRow,
-  signal: AbortSignal,
-  options: AccountSyncOptions,
-): Promise<ImapClient> {
-  const attempts = Math.max(1, options.connectAttempts ?? DEFAULT_CONNECT_ATTEMPTS);
-  const wait = options.sleep ?? sleep;
-  const random = options.random ?? Math.random;
+  result: AccountSyncResult,
+): void {
+  if (result.error === null) return;
+  updateAccountHealth(deps, account, {
+    finishedAt: result.finishedAt,
+    error: result.error,
+    failureKind: result.failureKind,
+    cause: makeCause(result),
+  });
+}
 
-  for (let attempt = 0; ; attempt += 1) {
-    throwIfAborted(signal);
-    try {
-      return await deps.connect(account);
-    } catch (error) {
-      const failure = classifyMailFailure(error);
-      if (attempt >= attempts - 1 || !isRetryableFailure(failure) || signal.aborted) throw error;
-
-      const waitMs = computeBackoffMs(attempt, {
-        baseMs: CONNECT_BACKOFF_BASE_MS,
-        maxMs: CONNECT_BACKOFF_MAX_MS,
-        retryAfterMs: failure.retryAfterMs,
-        random,
-      });
-      deps.log?.warn('IMAP 建连暂时失败，退避后重试', {
-        accountId: account.id,
-        attempt: attempt + 1,
-        kind: failure.kind,
-        signal: failure.signal,
-        waitMs,
-      });
-      await wait(waitMs, signal);
-    }
-  }
+/**
+ * `updateAccountHealth` 只从原始异常里读一个信号：凭据这一步过没过去。
+ * 那个布尔已经在同步结束时算好并放进结果里了，这里还原成它认得的形状即可，
+ * 免得为了推迟裁决就把整条异常链一路拖着走。
+ */
+function makeCause(result: AccountSyncResult): unknown {
+  return { credentialsResolved: result.credentialsResolved };
 }
 
 function openSyncRun(deps: SyncDeps, accountId: number, startedAt: number): number | null {

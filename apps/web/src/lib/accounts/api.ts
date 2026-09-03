@@ -1,7 +1,11 @@
 import {
+  CREDENTIAL_EXPORT_COUNT_HEADER,
+  CREDENTIAL_EXPORT_SKIPPED_HEADER,
   accountSchema,
+  apiErrorSchema,
   emptyDataSchema,
   healthSchema,
+  revealedAccountPasswordSchema,
   testConnectionResultSchema,
   userSchema,
   userSettingsSchema,
@@ -9,22 +13,26 @@ import {
   type AccountAuthType,
   type AccountProvider,
   type ChangePasswordRequest,
+  type ExportCredentialsRequest,
   type Health,
   type TestConnectionResult,
   type UpdateUserSettings,
   type User,
   type UserSettings,
 } from '@firemail/shared';
-import { api, apiFetch, isApiError } from '@/lib/api';
+import { API_BASE, ApiError, api, apiFetch, isApiError } from '@/lib/api';
+import { filenameFromDisposition } from '@/lib/accounts/download';
 import {
   accountEndpoints,
   adminEndpoints,
+  credentialEndpoints,
   securityEndpoints,
   settingsEndpoints,
 } from '@/lib/accounts/endpoints';
 import {
   accountListSchema,
   bulkImportOutcomeSchema,
+  bulkSyncStartedSchema,
   deviceCodeStateSchema,
   reauthCancelledSchema,
   registrationSchema,
@@ -32,6 +40,7 @@ import {
   syncStartedSchema,
   userListSchema,
   type BulkImportOutcome,
+  type BulkSyncStarted,
   type CreateAccountPayload,
   type DeviceCodeState,
   type SessionView,
@@ -85,6 +94,11 @@ export async function syncAccount(id: number): Promise<SyncStarted> {
   return api.post(accountEndpoints.sync(id), undefined, { schema: syncStartedSchema });
 }
 
+/** 批量同步：**一次**请求带走整批，不是 N 个单账号请求。见 lib/accounts/sync.ts。 */
+export async function syncAccounts(accountIds: number[]): Promise<BulkSyncStarted> {
+  return api.post(accountEndpoints.bulkSync, { accountIds }, { schema: bulkSyncStartedSchema });
+}
+
 /** 服务端有 25 秒硬时限，前端不再加自己的超时。 */
 export async function testAccount(id: number): Promise<TestConnectionResult> {
   return api.post(accountEndpoints.test(id), undefined, { schema: testConnectionResultSchema });
@@ -125,6 +139,86 @@ export async function pollReauth(id: number, signal?: AbortSignal): Promise<Devi
 export async function cancelReauth(id: number): Promise<boolean> {
   const result = await api.delete(accountEndpoints.reauth(id), { schema: reauthCancelledSchema });
   return result.cancelled;
+}
+
+// ---------------------------------------------------------------------------
+// 凭据
+//
+// 这两个函数是明文凭据在前端唯一的入口。调用方拿到值之后自己负责尽快丢掉：
+// 密码只放组件的局部 state（带自动过期），导出文件直接落盘，两者都不进 query 缓存。
+// ---------------------------------------------------------------------------
+
+/** 单个账号的明文密码。只在用户点「显示密码」时调用，不做预取、不做缓存。 */
+export async function revealAccountPassword(accountId: number): Promise<string> {
+  const revealed = await api.post(
+    credentialEndpoints.reveal,
+    { accountId },
+    { schema: revealedAccountPasswordSchema },
+  );
+  return revealed.password;
+}
+
+export interface CredentialExportFile {
+  filename: string;
+  /** 文件正文。拿到后应立即写盘并丢弃，不要放进任何长期状态。 */
+  text: string;
+  /** 服务端实际导出的账号数。 */
+  exported: number;
+  /** 四字段格式表达不了、因而**没有**进文件的账号数；> 0 时必须提示用户。 */
+  skipped: number;
+}
+
+/**
+ * 全量导出。响应是文件而不是 JSON 信封，所以这里绕开 `apiFetch` 直接用 fetch，
+ * 但错误路径仍然解同一种信封 —— 调用方只需要处理 ApiError。
+ */
+export async function exportCredentials(): Promise<CredentialExportFile> {
+  const body: ExportCredentialsRequest = { confirm: true };
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${credentialEndpoints.export}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/plain' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError('无法连接到服务器，请检查网络或服务是否在运行', {
+      code: 'network_error',
+      status: 0,
+    });
+  }
+
+  const text = await response.text();
+  if (!response.ok) throw toApiError(text, response.status);
+
+  return {
+    filename: filenameFromDisposition(response.headers.get('content-disposition')) ?? 'firemail-credentials.txt',
+    text,
+    exported: headerCount(response, CREDENTIAL_EXPORT_COUNT_HEADER),
+    skipped: headerCount(response, CREDENTIAL_EXPORT_SKIPPED_HEADER),
+  };
+}
+
+function headerCount(response: Response, name: string): number {
+  const value = Number(response.headers.get(name));
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function toApiError(text: string, status: number): ApiError {
+  try {
+    const envelope = apiErrorSchema.safeParse(JSON.parse(text));
+    if (envelope.success) {
+      return new ApiError(envelope.data.error.message, {
+        code: envelope.data.error.code,
+        status,
+      });
+    }
+  } catch {
+    // 不是 JSON 就走下面的兜底文案
+  }
+  return new ApiError(`导出失败（HTTP ${String(status)}）`, { code: 'internal_error', status });
 }
 
 // ---------------------------------------------------------------------------

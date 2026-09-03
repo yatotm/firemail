@@ -203,7 +203,9 @@ curl -s http://127.0.0.1:12381/api/health
 | PATCH | `/api/accounts/:id` | 部分更新 |
 | DELETE | `/api/accounts/:id` | 删除 |
 | PUT | `/api/accounts/:id/sync-enabled` | 单独开关同步 |
-| POST | `/api/accounts/:id/sync` | 立即同步，返回 **202** |
+| POST | `/api/accounts/sync` | 批量同步（第 2 层），返回 **202** |
+| POST | `/api/accounts/:id/sync` | 立即同步单个账号（第 3 层），返回 **202** |
+| POST | `/api/accounts/:id/resume` | 解除系统自动暂停 |
 | POST | `/api/accounts/:id/test` | 测试 IMAP/SMTP 连接 |
 | POST | `/api/accounts/:id/reauth` | 发起设备码授权，返回 **202**，限流 5/分钟 |
 | GET | `/api/accounts/:id/reauth` | 查授权流程状态 |
@@ -263,15 +265,38 @@ Outlook 只留 `oauth2`：微软 2024 年已对个人账号关停 IMAP/SMTP 基�
 
 返回 201：`{ "created": 27, "skipped": 2, "errors": [{ "line": 13, "message": "…" }] }`
 
+### `POST /api/accounts/sync`
+
+批量同步（第 2 层）。暂停后台基线，按 `FIREMAIL_SYNC_CONCURRENCY` 并行跑完这一批，
+批次结束后隔一会儿恢复基线。**不等结果**，返回 202：
+
+```jsonc
+// 请求体可省略；给了 accountIds 就只同步这些（别人的账号会被静默剔除）
+{ "accountIds": [3, 7] }
+
+// 响应
+{ "accountIds": [3, 7], "status": "started" }
+```
+
+一个账号用完 3 次尝试仍然失败就地标记并展示，**不再安排后续重试**——
+用户只点了一次，这一批就到此为止。
+
 ### `POST /api/accounts/:id/sync`
 
-**不等结果。** 返回 202：
+单账号同步（第 3 层，优先级最高）。**不等结果。** 返回 202：
 
 ```jsonc
 { "accountId": 3, "status": "started" }         // 或 "already_running"
 ```
 
-进度通过 SSE 的 `sync:start` / `sync:done` / `sync:error` 推送。
+进度通过 SSE 推送：`sync:start` → （失败时）`sync:retry` → `sync:done` / `sync:error`。
+**重试没用完之前不会有 `sync:error`**：中途的一次失败不是失败。
+
+### `POST /api/accounts/:id/resume`
+
+解除系统自动暂停（见 [configuration.md §3.1](./configuration.md)），返回更新后的账号。
+同时清掉降频与连续失败计数。与 `sync-enabled` 是两件互不覆盖的事：
+前者是系统的判定，后者是用户的意愿。
 
 ### `POST /api/accounts/:id/test`
 
@@ -599,13 +624,20 @@ N×8 个 folder 再自己求和——那是几百行数据换 4 个数字。
 
 | `type` | 字段 |
 | --- | --- |
-| `sync:start` | `accountId` |
-| `sync:done` | `accountId`、`newMessages` |
-| `sync:error` | `accountId`、`message` |
+| `sync:start` | `accountId`、`tier?` |
+| `sync:done` | `accountId`、`newMessages`、`tier?` |
+| `sync:error` | `accountId`、`message`、`tier?` —— 一轮**真的**失败了才发 |
+| `sync:retry` | `accountId`、`tier`、`attempt`、`maxAttempts`、`message` —— 中途失败，即将退避重试 |
+| `sync:tier` | `tier`、`state`（`running`/`paused`/`idle`）、`accounts` —— 层级切换，广播给所有连接 |
 | `message:new` | `accountId`、`folderId`、`messageIds[]` |
 | `message:flags` | `messageIds[]`、`patch`（`isRead`/`isStarred`/`isDeleted`） |
 | `message:moved` | `messageIds[]`、`fromFolderId`、`toFolderId` |
 | `account:status` | `accountId`、`status` |
+| `account:suspended` | `accountId`、`rounds`、`error` —— 只在**真的执行**了自动暂停时推送 |
+
+`tier` 取 `background` / `bulk` / `interactive`，是附加字段，老客户端忽略即可。
+活动中心应把 `sync:retry` 显示成「重试中 2/3」而不是落成失败——
+在 `sync:error` 到达之前，那一轮还没有失败。
 
 同类事件在 250 ms 窗口内合并、id 取并集（单条最多 500 个 id，超出后前端应整体 invalidate）。
 心跳 25 秒一次。

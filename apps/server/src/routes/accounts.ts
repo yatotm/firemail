@@ -20,6 +20,11 @@ const VERIFY_TIMEOUT_MS = 25_000;
 
 const syncEnabledSchema = z.object({ enabled: z.boolean() });
 
+/** 批量同步的选择集。不给 accountIds 就是「全部」。 */
+const bulkSyncSchema = z.object({
+  accountIds: z.array(z.number().int().positive()).max(500).optional(),
+});
+
 export function registerAccountRoutes(app: FastifyInstance, ctx: AppContext): void {
   const guard = { preHandler: app.requireAuth };
 
@@ -76,9 +81,27 @@ export function registerAccountRoutes(app: FastifyInstance, ctx: AppContext): vo
   });
 
   /**
-   * 立即同步。**不等结果**：一次同步可能跑几分钟，旧版本让 HTTP 请求阻塞在
-   * `future.result(timeout=300)` 上，而前端的 axios 超时是 10 秒——
-   * 用户永远看到超时，同步其实在跑。这里改成 202 + SSE 推进度。
+   * 批量同步（第 2 层）。暂停后台基线、按并发上限并行跑完这一批，然后隔一会儿恢复基线。
+   *
+   * 必须在 `/accounts/:id/*` 之前注册？不必——fastify 的静态路由天然优先于参数路由。
+   * 和单账号同步一样是 202 + SSE：一批 29 个账号可能跑几分钟。
+   */
+  app.post('/accounts/sync', guard, async (request, reply) => {
+    const auth = requireContext(request);
+    const { accountIds } = parseOrThrow(bulkSyncSchema, request.body ?? {});
+    const owned = ownedIds(ctx, auth.user.id, accountIds);
+
+    void ctx.scheduler
+      .syncAll(owned)
+      .catch((error: unknown) => request.log.error({ err: error }, '批量同步失败'));
+
+    return reply.code(202).send(ok({ accountIds: owned, status: 'started' }));
+  });
+
+  /**
+   * 立即同步单个账号（第 3 层，优先级最高）。**不等结果**：一次同步可能跑几分钟，
+   * 旧版本让 HTTP 请求阻塞在 `future.result(timeout=300)` 上，而前端的 axios 超时是
+   * 10 秒——用户永远看到超时，同步其实在跑。这里改成 202 + SSE 推进度。
    */
   app.post('/accounts/:id/sync', guard, async (request, reply) => {
     const account = requireAccount(ctx, request);
@@ -88,11 +111,23 @@ export function registerAccountRoutes(app: FastifyInstance, ctx: AppContext): vo
       return reply.code(202).send(ok({ accountId: account.id, status: 'already_running' }));
     }
 
-    void ctx.runner
-      .run(row)
+    void ctx.scheduler
+      .syncNow(account.id)
       .catch((error: unknown) => request.log.error({ err: error }, '手动同步失败'));
 
     return reply.code(202).send(ok({ accountId: account.id, status: 'started' }));
+  });
+
+  /**
+   * 一键恢复被系统自动暂停的账号。
+   *
+   * 与「启用/停用」（`sync-enabled`）是两件事：那个开关表达用户意愿，这个清除系统判定。
+   * 两者互不覆盖，正是自动暂停不复用 `status: 'disabled'` 的原因。
+   */
+  app.post('/accounts/:id/resume', guard, async (request) => {
+    const account = requireAccount(ctx, request);
+    ctx.scheduler.resume(account.id);
+    return ok(withSignature(ctx, requireAccount(ctx, request)));
   });
 
   app.post('/accounts/:id/test', guard, async (request) => {
@@ -144,6 +179,17 @@ function registerReauthRoutes(app: FastifyInstance, ctx: AppContext): void {
     ctx.deviceCode.forget(account.id);
     return ok({ cancelled });
   });
+}
+
+/**
+ * 批量同步的归属过滤。别人的账号不是 404 而是直接不在名单里——
+ * 一次批量操作不该因为夹了一个别人的 id 就整体失败，也不该因此泄露「这个 id 存在」。
+ */
+function ownedIds(ctx: AppContext, userId: number, accountIds?: number[]): number[] {
+  const mine = ctx.accounts.list(userId).map((account) => account.id);
+  if (accountIds === undefined) return mine;
+  const wanted = new Set(accountIds);
+  return mine.filter((id) => wanted.has(id));
 }
 
 /** 归属校验的唯一入口：所有 `/accounts/:id/*` 都必须先过这里。 */

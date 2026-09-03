@@ -10,6 +10,7 @@ import { API_PREFIX, registerStatic } from '../plugins/static.ts';
 import { registerAccountRoutes } from '../routes/accounts.ts';
 import { registerAttachmentRoutes } from '../routes/attachments.ts';
 import { registerAuthRoutes } from '../routes/auth.ts';
+import { registerCredentialRoutes } from '../routes/credentials.ts';
 import { registerEventRoutes } from '../routes/events.ts';
 import { registerFolderRoutes } from '../routes/folders.ts';
 import { registerHealthRoutes } from '../routes/health.ts';
@@ -92,6 +93,7 @@ export async function buildApp({
       registerAuthRoutes(api, ctx);
       registerUserRoutes(api, ctx);
       registerAccountRoutes(api, ctx);
+      registerCredentialRoutes(api, ctx);
       registerFolderRoutes(api, ctx);
       registerMessageRoutes(api, ctx);
       registerSendRoutes(api, ctx);

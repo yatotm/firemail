@@ -11,6 +11,7 @@ import {
   seedUser,
   type TestApp,
 } from '../http/__testkit__/index.ts';
+import { SyncSuspensionStore } from '../sync/suspension.ts';
 
 /**
  * 账号接口。
@@ -398,5 +399,85 @@ test('删除账号后连带清掉签名', async () => {
     const removed = await authed(t, session, { method: 'DELETE', url: `/api/accounts/${id}` });
     assert.equal(removed.statusCode, 200);
     assert.equal(t.ctx.settings.signature(id), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 三层同步：批量入口、自动暂停的展示与一键恢复
+// ---------------------------------------------------------------------------
+
+test('批量同步立刻返回 202，且只对自己的账号生效', async () => {
+  await withApp(async (t) => {
+    const mine = seedUser(t.db, { username: 'mine' });
+    const other = seedUser(t.db, { username: 'other' });
+    const session = await login(t, mine);
+    const a = seedAccount(t, mine.id, { email: 'a@x.com' });
+    const b = seedAccount(t, mine.id, { email: 'b@x.com' });
+    const theirs = seedAccount(t, other.id, { email: 'c@x.com' });
+
+    const all = await authed(t, session, { method: 'POST', url: '/api/accounts/sync' });
+    assert.equal(all.statusCode, 202);
+    assert.deepEqual(
+      data<{ accountIds: number[] }>(all).accountIds.sort((x, y) => x - y),
+      [a, b].sort((x, y) => x - y),
+    );
+
+    const subset = await authed(t, session, {
+      method: 'POST',
+      url: '/api/accounts/sync',
+      payload: { accountIds: [a, theirs] },
+    });
+    assert.equal(subset.statusCode, 202);
+    assert.deepEqual(
+      data<{ accountIds: number[] }>(subset).accountIds,
+      [a],
+      '别人的账号既不报错也不参与，更不泄露它存在',
+    );
+
+    await t.ctx.scheduler.drain();
+  });
+});
+
+test('自动暂停展示在账号视图里，与 status / syncEnabled 互不干扰', async () => {
+  await withApp(async (t) => {
+    const user = seedUser(t.db);
+    const session = await login(t, user);
+    const id = seedAccount(t, user.id);
+
+    const before = await authed(t, session, { method: 'GET', url: `/api/accounts/${id}` });
+    assert.equal(data<{ syncSuspension: unknown }>(before).syncSuspension, null);
+
+    const suspension = { since: 1_700_000_000_000, rounds: 8, error: '登录被拒', enforced: true };
+    new SyncSuspensionStore({ db: t.db }).set(id, suspension);
+
+    const after = await authed(t, session, { method: 'GET', url: `/api/accounts/${id}` });
+    const view = data<{ syncSuspension: unknown; status: string; syncEnabled: boolean }>(after);
+    assert.deepEqual(view.syncSuspension, suspension, '最终错误要跟着暂停记录一起展示');
+    assert.equal(view.status, 'active', '自动暂停不许改写 status');
+    assert.equal(view.syncEnabled, true, 'disabled / syncEnabled 是用户的意愿，系统不碰');
+
+    const listed = await authed(t, session, { method: 'GET', url: '/api/accounts' });
+    const rows = data<{ items: Array<{ syncSuspension: unknown }> }>(listed).items;
+    assert.deepEqual(rows[0]?.syncSuspension, suspension, '列表页也要看得见');
+  });
+});
+
+test('一键恢复清掉暂停记录', async () => {
+  await withApp(async (t) => {
+    const user = seedUser(t.db);
+    const session = await login(t, user);
+    const id = seedAccount(t, user.id);
+    new SyncSuspensionStore({ db: t.db }).set(id, {
+      since: 1_700_000_000_000,
+      rounds: 8,
+      error: '登录被拒',
+      enforced: true,
+    });
+
+    const resumed = await authed(t, session, { method: 'POST', url: `/api/accounts/${id}/resume` });
+
+    assert.equal(resumed.statusCode, 200);
+    assert.equal(data<{ syncSuspension: unknown }>(resumed).syncSuspension, null);
+    assert.equal(t.ctx.scheduler.suspension(id), null);
   });
 });

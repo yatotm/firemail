@@ -38,10 +38,19 @@ function harness(): Harness {
   };
 }
 
+/** 账号间隔与退避在单测里一律清零：这些用例验证的是排期与惩罚，不是真实等待。 */
 function scheduler(h: Harness, runner: SyncRunner, jitterRatio = 0) {
   return new SyncScheduler(
     { db: h.deps.db, runner },
-    { now: () => h.clock.now, random: () => 0.5, jitterRatio, log: NOOP_LOGGER },
+    {
+      now: () => h.clock.now,
+      random: () => 0.5,
+      jitterRatio,
+      log: NOOP_LOGGER,
+      gapMs: 0,
+      resumeDelayMs: 0,
+      sleep: async () => {},
+    },
   );
 }
 
@@ -164,9 +173,10 @@ test('账号锁被占用时定时轮询跳过它，不堆积任务', async () =>
   h.close();
 });
 
-test('29 个账号同时到期时并发被压在 4 条连接以内', async () => {
+test('29 个账号同时到期时后台基线严格串行，峰值连接数恒为 1', async () => {
   const h = harness();
   for (let i = 0; i < 29; i += 1) seedAccount(h.deps.db, { email: `a${i}@x.com` });
+  // 并发上限给到 4 也没用：串行是后台基线自己的性质，不由信号量决定
   const runner = new SyncRunner(h.deps, { concurrency: 4 });
   const sched = scheduler(h, runner);
 
@@ -174,7 +184,7 @@ test('29 个账号同时到期时并发被压在 4 条连接以内', async () =>
 
   assert.equal(tick.started.length, 29);
   assert.equal(h.server.connections, 29, '每个账号各同步一次');
-  assert.ok(h.server.maxLiveConnections <= 4, `峰值连接数 ${h.server.maxLiveConnections} 超过上限`);
+  assert.equal(h.server.maxLiveConnections, 1, `峰值连接数 ${h.server.maxLiveConnections}，后台层必须串行`);
   h.close();
 });
 
@@ -240,7 +250,7 @@ function flakyRunner(h: Harness, gate: { fail: Error | null }): SyncRunner {
         return h.server.connect();
       },
     },
-    { concurrency: 2, syncDefaults: { sleep: async () => {} } },
+    { concurrency: 2 },
   );
 }
 

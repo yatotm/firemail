@@ -1,9 +1,11 @@
-import type { AccountStatus } from '@firemail/shared';
+import type { AccountStatus, SyncTier } from '@firemail/shared';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { accounts, messages } from '../db/schema.ts';
 import type { AccountSyncOptions } from '../sync/accountSync.ts';
-import { SyncRunner, type SyncRunnerOptions } from '../sync/runner.ts';
+import type { SyncRound } from '../sync/attempts.ts';
+import type { SyncPolicy } from '../sync/policy.ts';
+import { SyncRunner, type RoundOptions, type SyncRunnerOptions } from '../sync/runner.ts';
 import type { AccountRow, AccountSyncResult, SyncDeps } from '../sync/types.ts';
 import type { SseHub } from './hub.ts';
 
@@ -13,8 +15,12 @@ const MAX_NEW_IDS = 200;
 /**
  * 给同步引擎接上 SSE。
  *
- * 用继承而不是改同步引擎：`SyncRunner` 是调度器与「立即同步」按钮唯一的入口，
- * 在这里包一层就能覆盖两条路径，而同步引擎本身继续对传输层一无所知。
+ * 用继承而不是改同步引擎：`SyncRunner` 是三层调度唯一的执行入口，
+ * 在这里包一层就覆盖了全部路径，而同步引擎本身继续对传输层一无所知。
+ *
+ * 事件是**按轮**发的，不是按尝试：一轮里 `sync:start` 只发一次，
+ * 中途失败发 `sync:retry`（活动中心显示「重试 2/3」而不是落成失败），
+ * 只有整轮真的失败了才发 `sync:error`。这就是「重试用完之前界面上不出现失败」的落点。
  */
 export class EventingSyncRunner extends SyncRunner {
   readonly #db: Db;
@@ -50,7 +56,68 @@ export class EventingSyncRunner extends SyncRunner {
     return result;
   }
 
-  #emitResult(account: AccountRow, result: AccountSyncResult): void {
+  override async runRound(
+    account: AccountRow,
+    policy: SyncPolicy,
+    options: RoundOptions = {},
+  ): Promise<SyncRound> {
+    this.#hub.publish(account.userId, {
+      type: 'sync:start',
+      accountId: account.id,
+      tier: policy.tier,
+    });
+    const round = await super.runRound(account, policy, this.#withRetryEvents(account, policy, options));
+    this.#emitResult(account, round.result, policy.tier);
+    return round;
+  }
+
+  override async tryRunRound(
+    account: AccountRow,
+    policy: SyncPolicy,
+    options: RoundOptions = {},
+  ): Promise<SyncRound | null> {
+    if (this.isSyncing(account.id)) return super.tryRunRound(account, policy, options);
+
+    this.#hub.publish(account.userId, {
+      type: 'sync:start',
+      accountId: account.id,
+      tier: policy.tier,
+    });
+    const round = await super.tryRunRound(
+      account,
+      policy,
+      this.#withRetryEvents(account, policy, options),
+    );
+    if (round === null) {
+      this.#hub.publish(account.userId, { type: 'sync:done', accountId: account.id, newMessages: 0 });
+      return null;
+    }
+    this.#emitResult(account, round.result, policy.tier);
+    return round;
+  }
+
+  /** 把 `sync:retry` 挂到重试驱动器上，同时保留调用方自己注入的时钟与等待。 */
+  #withRetryEvents(account: AccountRow, policy: SyncPolicy, options: RoundOptions): RoundOptions {
+    return {
+      ...options,
+      attempts: {
+        ...options.attempts,
+        onRetry: (notice) => {
+          options.attempts?.onRetry?.(notice);
+          this.#hub.publish(account.userId, {
+            type: 'sync:retry',
+            accountId: account.id,
+            tier: policy.tier,
+            attempt: notice.attempt,
+            maxAttempts: notice.maxAttempts,
+            message: notice.message,
+          });
+        },
+      },
+    };
+  }
+
+  #emitResult(account: AccountRow, result: AccountSyncResult, tier?: SyncTier): void {
     const userId = account.userId;
 
     if (result.status === 'error') {
@@ -58,12 +125,14 @@ export class EventingSyncRunner extends SyncRunner {
         type: 'sync:error',
         accountId: account.id,
         message: result.error ?? '同步失败',
+        ...(tier ? { tier } : {}),
       });
     } else {
       this.#hub.publish(userId, {
         type: 'sync:done',
         accountId: account.id,
         newMessages: result.newMessages,
+        ...(tier ? { tier } : {}),
       });
     }
 

@@ -217,7 +217,15 @@ export const settings = sqliteTable('settings', {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().default(now),
 });
 
-/** 同步历史，账号健康度面板的数据来源。 */
+/**
+ * 同步历史，内部审计日志，目前不对外暴露（没有路由或界面读它）。
+ *
+ * **一行 = 一次尝试，不是一轮。** 一轮最多 `FIREMAIL_SYNC_MAX_ATTEMPTS` 次尝试，
+ * 中途失败的尝试同样会留下 error 行，而那一轮最终可能是成功的。所以直接对本表
+ * 求失败率得到的是「尝试失败率」，远高于真实的「轮失败率」——统计前先按
+ * (account_id, 时间窗) 归并成轮。账号健康度看 `accounts.status`/`last_error`，
+ * 它们只在一轮真的失败后才写。
+ */
 export const syncRuns = sqliteTable(
   'sync_runs',
   {

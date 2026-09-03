@@ -55,6 +55,39 @@ test('上限为 1 时任务严格串行', async () => {
   assert.deepEqual(order, [3, 2, 1], '按提交顺序依次执行');
 });
 
+test('插队：用户正在等的那一个排在已排队的批量任务前面', async () => {
+  const pool = new Semaphore(1);
+  const order: string[] = [];
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const holder = pool.run(async () => {
+    await gate;
+  });
+  await delay(1);
+
+  const queued = [
+    pool.run(async () => {
+      order.push('bulk-1');
+    }),
+    pool.run(async () => {
+      order.push('bulk-2');
+    }),
+  ];
+  await delay(1);
+  const urgent = pool.run(async () => {
+    order.push('interactive');
+  }, { priority: true });
+
+  release?.();
+  await Promise.all([holder, urgent, ...queued]);
+
+  assert.equal(order[0], 'interactive', '插队的任务必须先跑，否则「优先级最高」只是句空话');
+  assert.deepEqual(order, ['interactive', 'bulk-1', 'bulk-2']);
+});
+
 // ---------------------------------------------------------------------------
 // KeyedMutex
 // ---------------------------------------------------------------------------

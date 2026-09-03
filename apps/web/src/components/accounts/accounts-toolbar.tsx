@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ACCOUNT_STATUS_META } from '@/lib/account-status';
 import { PROVIDER_LABEL, type AccountFilters } from '@/lib/accounts/dashboard';
-import type { SyncProgress } from '@/hooks/accounts/use-account-actions';
 
 const STATUS_OPTIONS = [
   { value: 'all' as const, label: '全部状态' },
@@ -29,14 +28,15 @@ export function AccountsToolbar({
   onFilterChange,
   onSyncAll,
   syncing,
-  syncProgress,
+  syncingCount,
   searchRef,
 }: {
   filters: AccountFilters;
   onFilterChange: (patch: Partial<AccountFilters>) => void;
   onSyncAll: () => void;
   syncing: boolean;
-  syncProgress: SyncProgress | null;
+  /** 此刻真的在同步的账号数（来自 SSE）。批量同步只回 202，没有别的进度可报。 */
+  syncingCount: number;
   searchRef: RefObject<HTMLInputElement | null>;
 }) {
   return (
@@ -79,7 +79,7 @@ export function AccountsToolbar({
 
       <Button variant="outline" onClick={onSyncAll} disabled={syncing}>
         <RefreshCwIcon className={syncing ? 'animate-spin' : undefined} aria-hidden />
-        {syncProgress ? `同步中 ${syncProgress.done}/${syncProgress.total}` : '全部同步'}
+        {syncingCount > 0 ? `同步中 ${syncingCount}` : '全部同步'}
       </Button>
     </div>
   );

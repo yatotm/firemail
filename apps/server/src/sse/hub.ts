@@ -4,12 +4,13 @@ import type { SyncLogger } from '../sync/types.ts';
 /**
  * SSE 连接注册表。
  *
- * 三个必须做对的地方：
+ * 四个必须做对的地方：
  *  1. **每次写都要能失败**。上游项目最近一次提交修的就是「往已断开的客户端写」导致的崩溃：
  *     客户端关标签页和服务端 write 之间永远有竞态，写失败只能是常态处理，不能是异常。
  *  2. **合并高频事件**。一轮 500 封的同步如果一封一个事件，前端会收到 500 次 invalidate。
  *     同类事件在 `coalesceMs` 窗口内合并成一条，id 列表取并集。
  *  3. **每用户连接数封顶**。29 个账号 + 多标签页，没有上限就是一条条泄漏的长连接。
+ *  4. **心跳必须是具名事件，不能是注释帧**。见 `pingFrame`。
  */
 
 export interface SseSink {
@@ -25,6 +26,8 @@ export interface SseHubOptions {
   coalesceMs?: number;
   /** 合并后单条事件里最多带多少个 id，超出就截断（前端拿到就整体 invalidate）。 */
   maxMergedIds?: number;
+  /** 写进 `retry:` 前导帧的毫秒数，只对原生 EventSource 的默认重连行为生效。 */
+  retryHintMs?: number;
   now?: () => number;
   log?: SyncLogger;
 }
@@ -34,6 +37,7 @@ const DEFAULTS = {
   heartbeatMs: 25_000,
   coalesceMs: 250,
   maxMergedIds: 500,
+  retryHintMs: 3_000,
 };
 
 export interface SseConnection {
@@ -65,6 +69,7 @@ export class SseHub {
       heartbeatMs: options.heartbeatMs ?? DEFAULTS.heartbeatMs,
       coalesceMs: options.coalesceMs ?? DEFAULTS.coalesceMs,
       maxMergedIds: options.maxMergedIds ?? DEFAULTS.maxMergedIds,
+      retryHintMs: options.retryHintMs ?? DEFAULTS.retryHintMs,
     };
     this.#now = options.now ?? Date.now;
     this.#log = options.log;
@@ -101,15 +106,33 @@ export class SseHub {
     this.#startHeartbeat();
 
     sink.on('close', () => this.#remove(client));
-    // 立刻给一条注释帧：让代理层认定连接已开始，避免它缓冲首个事件
-    this.#write(client, ': connected\n\n');
+    this.#write(client, this.#preamble());
     return client;
+  }
+
+  /**
+   * 连接建立时立刻发的前导帧，三件事一次做完：
+   *  1. `retry:` 给浏览器原生 EventSource 一个兜底重连间隔（我们的客户端自己退避，
+   *     但连接在客户端代码接管之前就断掉时，原生行为默认只等 3 秒，会打出一串重连）；
+   *  2. 一条注释帧让代理层认定响应已经开始，不再缓冲后续事件；
+   *  3. 立刻来一次心跳——否则客户端的存活计时器要先空等一整个心跳周期才有第一帧。
+   */
+  #preamble(): string {
+    return `retry: ${this.#options.retryHintMs}\n\n: connected\n\n${pingFrame(this.#now())}`;
   }
 
   /** 立刻推送，不合并。用于低频、必须及时到达的事件。 */
   publish(userId: number, event: ServerEvent): void {
     const frame = toFrame(event);
     for (const client of this.#clients.get(userId) ?? []) this.#write(client, frame);
+  }
+
+  /**
+   * 推给所有在线连接。用于不属于任何单个账号的事件——
+   * 目前只有 `sync:tier`（后台同步被抢占 / 恢复），它描述的是调度器整体的状态。
+   */
+  broadcast(event: ServerEvent): void {
+    for (const userId of [...this.#clients.keys()]) this.publish(userId, event);
   }
 
   /**
@@ -188,8 +211,9 @@ export class SseHub {
 
   /** 心跳。单独暴露是为了让测试用假时钟直接驱动，不必真等 25 秒。 */
   heartbeat(): void {
+    const frame = pingFrame(this.#now());
     for (const set of [...this.#clients.values()]) {
-      for (const client of [...set]) this.#write(client, ': ping\n\n');
+      for (const client of [...set]) this.#write(client, frame);
     }
   }
 
@@ -208,6 +232,22 @@ export function toFrame(event: ServerEvent): string {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
+/** 心跳事件名。不进 `serverEventSchema`：它是传输层的存活信号，不是业务事件。 */
+export const PING_EVENT = 'ping';
+
+/**
+ * 心跳帧。**必须是具名事件，不能是 `: ping` 注释帧。**
+ *
+ * 注释帧确实能让 TCP 与代理层保持活跃，但 `EventSource` 规范要求丢弃注释，
+ * 浏览器里的 JS 永远看不到它。心跳一旦对客户端不可见，客户端就没有任何办法
+ * 区分「一切正常但很安静」和「连接已经悄悄死了」——链路被 NAT / 反代静默掐断时
+ * 不会有 `onerror`，UI 会一直显示「已连接」，活动中心里的操作永远转圈。
+ * 具名事件会走到 JS 的 `addEventListener('ping')`，存活检测才成立。
+ */
+export function pingFrame(at: number): string {
+  return `event: ${PING_EVENT}\ndata: {"t":${at}}\n\n`;
+}
+
 function coalesceKey(event: ServerEvent): string {
   switch (event.type) {
     case 'message:new':
@@ -219,8 +259,12 @@ function coalesceKey(event: ServerEvent): string {
     case 'sync:start':
     case 'sync:done':
     case 'sync:error':
+    case 'sync:retry':
     case 'account:status':
+    case 'account:suspended':
       return `${event.type}:${event.accountId}`;
+    case 'sync:tier':
+      return `${event.type}:${event.tier}`;
   }
 }
 

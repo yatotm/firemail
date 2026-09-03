@@ -62,6 +62,17 @@ export const syncStartedSchema = z.object({
 });
 export type SyncStarted = z.infer<typeof syncStartedSchema>;
 
+/**
+ * `POST /accounts/sync` 同样返回 202。
+ * `accountIds` 是服务端**实际接手**的那一份（它只认当前用户自己的账号），
+ * 可能比请求里给的少 —— 少掉的那些不会有任何 SSE 事件。
+ */
+export const bulkSyncStartedSchema = z.object({
+  accountIds: z.array(idSchema),
+  status: z.literal('started'),
+});
+export type BulkSyncStarted = z.infer<typeof bulkSyncStartedSchema>;
+
 /** 设备码授权状态。**不含 device_code 与任何 token**，可以安全地放进前端缓存。 */
 export const deviceCodeStateSchema = z.object({
   accountId: idSchema,

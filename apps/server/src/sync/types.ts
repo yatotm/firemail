@@ -109,6 +109,16 @@ export interface AccountSyncResult {
    * 调度器靠 `'throttled'` 决定要不要给这个账号临时降频。
    */
   failureKind: MailFailureKind | null;
+  /**
+   * 服务端明确给出的建议退避毫秒数（`ETHROTTLE` 的 Suggested Backoff Time），没给就是 null。
+   * 重试驱动器优先听它的，而不是自己算指数退避——服务端比我们更清楚该等多久。
+   */
+  retryAfterMs: number | null;
+  /**
+   * 失败发生时凭据是否已经成功拿到手。
+   * 提出来放在结果里，是为了让「一轮全失败之后再补记健康度」不必拖着整条异常链走。
+   */
+  credentialsResolved: boolean;
 }
 
 /** 同步被自身超时或调用方取消。 */

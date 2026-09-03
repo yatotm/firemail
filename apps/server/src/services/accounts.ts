@@ -6,6 +6,7 @@ import {
   type AccountListQuery,
   type AccountSmtpStatus,
   type AccountStatus,
+  type AccountSuspension,
   type BulkImportResult,
 } from '@firemail/shared';
 import { and, eq, inArray, like, or, sql, type SQL } from 'drizzle-orm';
@@ -15,6 +16,7 @@ import type { Db } from '../db/client.ts';
 import { accounts, folders } from '../db/schema.ts';
 import { applyProviderDefaults, supportsAuthType } from '../providers/defaults.ts';
 import type { AccountRow } from '../providers/types.ts';
+import { SyncSuspensionStore } from '../sync/suspension.ts';
 import { SmtpHealthStore, UNKNOWN_SMTP_HEALTH, type SmtpHealth } from './smtpHealth.ts';
 
 export type AccountErrorCode = 'bad_request' | 'not_found' | 'conflict';
@@ -68,12 +70,14 @@ export class AccountService {
   readonly #box: SecretBox;
   readonly #now: () => number;
   readonly #smtp: SmtpHealthStore;
+  readonly #suspensions: SyncSuspensionStore;
 
   constructor(options: AccountServiceOptions) {
     this.#db = options.db;
     this.#box = options.box;
     this.#now = options.now ?? Date.now;
     this.#smtp = new SmtpHealthStore({ db: options.db, now: this.#now });
+    this.#suspensions = new SyncSuspensionStore({ db: options.db });
   }
 
   list(userId: number, query: AccountListQuery = {}): Account[] {
@@ -97,13 +101,21 @@ export class AccountService {
     const ids = rows.map((r) => r.id);
     const unread = this.#unreadCounts(ids);
     const smtp = this.#smtp.getMany(ids);
-    return rows.map((row) => toView(row, unread.get(row.id) ?? 0, smtp.get(row.id)));
+    const suspended = this.#suspensions.getMany(ids);
+    return rows.map((row) =>
+      toView(row, unread.get(row.id) ?? 0, smtp.get(row.id), suspended.get(row.id) ?? null),
+    );
   }
 
   get(userId: number, accountId: number): Account | null {
     const row = this.#find(userId, accountId);
     if (!row) return null;
-    return toView(row, this.#unreadCounts([row.id]).get(row.id) ?? 0, this.#smtp.get(row.id));
+    return toView(
+      row,
+      this.#unreadCounts([row.id]).get(row.id) ?? 0,
+      this.#smtp.get(row.id),
+      this.#suspensions.get(row.id),
+    );
   }
 
   /** 发信能力，与收信健康度（status）互不影响。 */
@@ -239,12 +251,14 @@ export class AccountService {
       row,
       this.#unreadCounts([accountId]).get(accountId) ?? 0,
       this.#smtp.get(accountId),
+      this.#suspensions.get(accountId),
     );
   }
 
   remove(userId: number, accountId: number): boolean {
     this.#requireRow(userId, accountId);
     this.#smtp.clear(accountId);
+    this.#suspensions.clear(accountId);
     return this.#db.delete(accounts).where(eq(accounts.id, accountId)).run().changes > 0;
   }
 
@@ -456,7 +470,12 @@ export function parseBulkImportPayload(payload: string, separator = '----'): Bul
 }
 
 /** 密文列不出现在返回值里，只留"有没有配"的布尔。 */
-function toView(row: AccountRow, unreadCount: number, smtp: SmtpHealth = UNKNOWN_SMTP_HEALTH): Account {
+function toView(
+  row: AccountRow,
+  unreadCount: number,
+  smtp: SmtpHealth = UNKNOWN_SMTP_HEALTH,
+  suspension: AccountSuspension | null = null,
+): Account {
   return {
     id: row.id,
     userId: row.userId,
@@ -484,6 +503,7 @@ function toView(row: AccountRow, unreadCount: number, smtp: SmtpHealth = UNKNOWN
     syncEnabled: row.syncEnabled,
     syncIntervalSeconds: row.syncIntervalSeconds,
     lastSyncedAt: row.lastSyncedAt?.getTime() ?? null,
+    syncSuspension: suspension,
     unreadCount,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),

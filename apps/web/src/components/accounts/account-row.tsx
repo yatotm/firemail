@@ -1,6 +1,7 @@
 import type { Account } from '@firemail/shared';
 import { EllipsisIcon } from 'lucide-react';
 import { forwardRef } from 'react';
+import { RevealPasswordButton } from '@/components/accounts/reveal-password-button';
 import { AccountBar } from '@/components/common/account-avatar';
 import { AccountStatusLabel } from '@/components/common/account-status';
 import { Checkbox, Switch } from '@/components/settings/controls';
@@ -132,6 +133,9 @@ export const AccountRow = forwardRef<HTMLButtonElement, AccountRowProps>(functio
               {REPAIR_ACTION_LABEL[repair]}
             </Button>
           ) : null}
+
+          {/* 明文按需取：点开才发请求，不点这一行连密码的存在性之外什么都不知道 */}
+          <RevealPasswordButton account={account} />
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

@@ -1,6 +1,11 @@
 import type { ServerEvent } from '@firemail/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SseClient, type EventSourceLike, type SseStatus } from './sse.ts';
+import {
+  DEFAULT_HEARTBEAT_TIMEOUT_MS,
+  SseClient,
+  type EventSourceLike,
+  type SseStatus,
+} from './sse.ts';
 
 class FakeSource implements EventSourceLike {
   onopen: ((event: Event) => void) | null = null;
@@ -276,13 +281,95 @@ describe('重连', () => {
     expect(client.status).toBe('reconnecting');
   });
 
-  it('heartbeatTimeoutMs 为 0 时不装心跳定时器（服务端心跳是不可见的注释帧）', async () => {
+  it('服务端的 ping 心跳会重置存活计时器', async () => {
+    const h = createHarness({ heartbeatTimeoutMs: 5000 });
+    h.client.start();
+    await flush();
+    h.sources[0]?.open();
+    expect(h.delays.filter((ms) => ms === 5000)).toHaveLength(1);
+
+    h.sources[0]?.emitNamed('ping', { t: 1 });
+    h.sources[0]?.emitNamed('ping', { t: 2 });
+
+    // 心跳只续命，不该被当成业务事件投递出去
+    expect(h.delays.filter((ms) => ms === 5000)).toHaveLength(3);
+    expect(h.events).toHaveLength(0);
+    expect(h.unknown).toHaveLength(0);
+  });
+
+  it('默认就开着存活检测 —— 静默断线时没有 onerror，只能靠它兜底', async () => {
+    const sources: FakeSource[] = [];
+    const delays: number[] = [];
+    const client = new SseClient({
+      url: '/events',
+      onEvent: () => undefined,
+      create: () => {
+        const source = new FakeSource();
+        sources.push(source);
+        return source;
+      },
+      setTimer: (_fn, ms) => {
+        delays.push(ms);
+        return delays.length;
+      },
+      clearTimer: () => undefined,
+    });
+
+    client.start();
+    await flush();
+    sources[0]?.open();
+
+    expect(delays).toEqual([DEFAULT_HEARTBEAT_TIMEOUT_MS]);
+  });
+
+  it('heartbeatTimeoutMs 为 0 时显式关闭存活检测', async () => {
     const h = createHarness({ heartbeatTimeoutMs: 0 });
     h.client.start();
     await flush();
     h.sources[0]?.open();
 
     expect(h.delays).toHaveLength(0);
+  });
+
+  it('onerror 与心跳超时同时触发时，只重连一次、只取一张票', async () => {
+    const urls: string[] = [];
+    let issued = 0;
+    const sources: FakeSource[] = [];
+    const timers: (() => void)[] = [];
+    const client = new SseClient({
+      url: () => Promise.resolve(`/api/events?ticket=t${++issued}`),
+      onEvent: () => undefined,
+      heartbeatTimeoutMs: 5000,
+      random: () => 0.5,
+      create: (url) => {
+        urls.push(url);
+        const source = new FakeSource();
+        sources.push(source);
+        return source;
+      },
+      setTimer: (fn) => {
+        timers.push(fn);
+        return timers.length;
+      },
+      clearTimer: () => undefined,
+    });
+
+    client.start();
+    await flush();
+    sources[0]?.open();
+
+    // 同一次断线的两条信号：一条来自浏览器，一条来自我们自己的存活计时器
+    sources[0]?.fail();
+    sources[0]?.fail();
+    timers.pop()?.();
+    await flush();
+    // 取票还在飞的时候又来一次 onerror，不能把它打断再排一次
+    sources[0]?.fail();
+    await flush();
+
+    expect(urls).toEqual(['/api/events?ticket=t1', '/api/events?ticket=t2']);
+    expect(issued).toBe(2);
+    expect(sources).toHaveLength(2);
   });
 
   it('stop 之后不再重连', async () => {

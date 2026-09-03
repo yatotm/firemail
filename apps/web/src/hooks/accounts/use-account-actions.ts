@@ -1,6 +1,6 @@
 import type { Account, AccountStatus } from '@firemail/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import * as accountsApi from '@/lib/accounts/api';
 import { runBatch } from '@/lib/accounts/batch';
 import {
@@ -11,20 +11,16 @@ import {
   removeAccountsFromCache,
   replaceAccountInCache,
 } from '@/lib/accounts/cache';
-import { humanizeApiError } from '@/lib/api';
-import { showErrorToast, showInfoToast, showSuccessToast, showUndoToast } from '@/lib/undo';
-import { useOptionalActivity } from '@/hooks/use-activity';
+import { showErrorToast, showSuccessToast, showUndoToast } from '@/lib/undo';
+import { useSyncMutation } from '@/hooks/accounts/use-sync-mutation';
 
 /**
  * 账号列表上的写操作。可逆的（同步开关、启用/停用）走乐观更新 + 失败回滚 +
  * 撤销 toast；**删除不可逆**，所以它不乐观、由调用方先弹 AlertDialog
  * （interactions.md §4.1）。
+ *
+ * 同步不在此列：它是 202 + SSE 的异步操作，规则集中在 `useSyncMutation`。
  */
-
-export interface SyncProgress {
-  done: number;
-  total: number;
-}
 
 interface RollbackContext {
   rollback: () => void;
@@ -45,7 +41,7 @@ export interface AccountActions {
   setEnabled: (targets: Account[], enabled: boolean) => void;
   syncNow: (targets: Account[]) => void;
   remove: (targets: Account[]) => Promise<void>;
-  syncProgress: SyncProgress | null;
+  /** 只表示同步请求在途；同步本身的进行中账号由 SSE 给（`syncingAccountIds`）。 */
   isSyncing: boolean;
   isRemoving: boolean;
   isUpdatingStatus: boolean;
@@ -53,8 +49,7 @@ export interface AccountActions {
 
 export function useAccountActions(): AccountActions {
   const client = useQueryClient();
-  const activity = useOptionalActivity();
-  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const sync = useSyncMutation();
 
   const syncEnabled = useMutation<Account, unknown, { id: number; enabled: boolean }, RollbackContext>({
     mutationFn: ({ id, enabled }) => accountsApi.setAccountSyncEnabled(id, enabled),
@@ -110,49 +105,6 @@ export function useAccountActions(): AccountActions {
     onSettled: () => invalidateAccountData(client),
   });
 
-  const sync = useMutation({
-    mutationFn: async (targets: Account[]) => {
-      setSyncProgress({ done: 0, total: targets.length });
-      return runBatch(targets, (account) => accountsApi.syncAccount(account.id), {
-        onProgress: (done, total) => setSyncProgress({ done, total }),
-      });
-    },
-    // 请求还没发出去就先把「进行中」摆出来：点击必须立刻有可见结果
-    onMutate: (targets) => {
-      for (const account of targets) activity.begin('sync', account.id, account.email);
-    },
-    onSuccess: (outcome, targets) => {
-      if (targets.length === 0) {
-        showInfoToast('没有可同步的账号');
-        return;
-      }
-      if (outcome.rejected.length > 0) {
-        // 发起就失败的，SSE 永远不会给它一个终态，必须在这里落定
-        for (const account of targets.slice(outcome.fulfilled.length)) {
-          activity.settle('sync', account.id, 'error', humanizeApiError(outcome.rejected[0]));
-        }
-        showErrorToast(`${outcome.rejected.length} 个账号无法发起同步`, outcome.rejected[0]);
-        return;
-      }
-      const running = outcome.fulfilled.filter((item) => item.status === 'already_running').length;
-      showInfoToast(
-        running > 0
-          ? `已请求同步 ${targets.length} 个账号（${running} 个本来就在同步中）`
-          : `已请求同步 ${targets.length} 个账号`,
-      );
-    },
-    onError: (error, targets) => {
-      for (const account of targets) {
-        activity.settle('sync', account.id, 'error', humanizeApiError(error));
-      }
-      showErrorToast('同步请求失败', error);
-    },
-    onSettled: () => {
-      setSyncProgress(null);
-      invalidateAccountData(client);
-    },
-  });
-
   const remove = useMutation({
     mutationFn: async (targets: Account[]) => {
       const outcome = await runBatch(targets, (account) => accountsApi.deleteAccount(account.id));
@@ -188,7 +140,7 @@ export function useAccountActions(): AccountActions {
     [status],
   );
 
-  const syncNow = useCallback((targets: Account[]) => sync.mutate(targets), [sync]);
+  const syncNow = useCallback((targets: Account[]) => sync.start(targets), [sync]);
 
   const removeAccounts = useCallback(
     async (targets: Account[]) => {
@@ -203,7 +155,6 @@ export function useAccountActions(): AccountActions {
     setEnabled,
     syncNow,
     remove: removeAccounts,
-    syncProgress,
     isSyncing: sync.isPending,
     isRemoving: remove.isPending,
     isUpdatingStatus: status.isPending,

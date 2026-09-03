@@ -31,6 +31,44 @@ export function smtpReauthMayHelp(status: AccountSmtpStatus): boolean {
   return status === 'auth_error';
 }
 
+/**
+ * 同步的三个优先级层级。
+ *
+ *  - background  —— 7×24 的后台基线，**严格串行**，用户打开界面时该收的信已经在了；
+ *  - bulk        —— 用户点「全部同步」/ 多选同步，为了快而并行，期间 background 暂停；
+ *  - interactive —— 用户对单个账号点「立即同步」，优先级最高。
+ */
+export const syncTierSchema = z.enum(['background', 'bulk', 'interactive']);
+export type SyncTier = z.infer<typeof syncTierSchema>;
+
+/**
+ * 自动暂停的记录。
+ *
+ * 为什么**不**复用 `status: 'disabled'`：那个值的含义是「用户自己把同步关了」，
+ * 系统再往里写就分不清「我关的」和「系统放弃了」——而这两件事的处理方式正好相反
+ * （前者要保持关闭，后者要提示用户一键恢复）。所以自动暂停是一条独立的、附加的记录，
+ * `status` 与 `syncEnabled` 的既有含义原样保留。
+ *
+ * `enforced: false` 是**只观察不执行**模式：判定照常记录、照常展示，但账号继续同步。
+ * 门槛需要真实数据来标定，先记录再开闸（见 docs/configuration.md）。
+ */
+export const accountSuspensionSchema = z.object({
+  /** 判定发生的时刻。 */
+  since: z.number().int(),
+  /** 连续失败的轮数（一轮 = 该账号用完全部重试次数仍然失败）。 */
+  rounds: z.number().int().min(1),
+  /** 最后一次失败的原因，原样展示给用户。 */
+  error: z.string().nullable(),
+  /** true = 已真的停止调度；false = 只记录，账号仍在同步。 */
+  enforced: z.boolean(),
+});
+export type AccountSuspension = z.infer<typeof accountSuspensionSchema>;
+
+/** 账号是否真的被系统停掉了同步。只观察模式下恒为 false。 */
+export function isSyncSuspended(suspension: AccountSuspension | null | undefined): boolean {
+  return suspension?.enforced === true;
+}
+
 export const SYNC_INTERVAL_MIN_SECONDS = 60;
 export const SYNC_INTERVAL_MAX_SECONDS = 86_400;
 export const SYNC_INTERVAL_DEFAULT_SECONDS = 300;
@@ -80,6 +118,13 @@ export const accountSchema = z
 
     /** 撰写时附加的签名。可选是为了让只读路径（同步引擎的账号视图）不必关心它。 */
     signatureHtml: z.string().nullable().optional(),
+
+    /**
+     * 系统自动暂停的判定，没有判定时为 null。
+     * 与 `status` / `syncEnabled` 正交：那两个字段的含义一个字都没变。
+     * 可选（而不是 `.default(null)`）是为了不破坏既有的 Account 字面量。
+     */
+    syncSuspension: accountSuspensionSchema.nullable().optional(),
 
     unreadCount: z.number().int().min(0).default(0),
   })
@@ -168,6 +213,47 @@ export const accountListQuerySchema = z.object({
   q: z.string().trim().min(1).optional(),
 });
 export type AccountListQuery = z.infer<typeof accountListQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// 凭据访问
+//
+// 账号列表 / 详情**永远**只回 hasPassword / hasOAuthToken（见 accountSchema）。
+// 需要明文的场景走下面这两个独立端点：一次一个账号的「显示密码」，以及
+// 管理员的一次性全量导出备份。二者都不复用账号接口，凭据也就不会顺着列表泄出去。
+// ---------------------------------------------------------------------------
+
+/** 与 `bulkImportAccountsRequestSchema.separator` 的默认值一致：导出必须能被导入原样吃回去。 */
+export const CREDENTIAL_SEPARATOR = '----';
+
+/**
+ * 「显示密码」的请求。用 POST + body 而不是 GET + 路径参数：
+ * 不进浏览器历史、不进任何中间缓存，且要过 CSRF 的来源校验。
+ */
+export const revealAccountPasswordRequestSchema = z.object({ accountId: idSchema });
+export type RevealAccountPasswordRequest = z.infer<typeof revealAccountPasswordRequestSchema>;
+
+/** 明文密码只在这一种响应里出现，且一次只有一个账号。 */
+export const revealedAccountPasswordSchema = z.object({
+  accountId: idSchema,
+  email: z.string().email(),
+  password: z.string(),
+});
+export type RevealedAccountPassword = z.infer<typeof revealedAccountPasswordSchema>;
+
+/** 全量导出会把每个账号的凭据一次性变成明文文件，必须显式确认。 */
+export const exportCredentialsRequestSchema = z.object({
+  confirm: z.literal(true, {
+    errorMap: () => ({ message: '必须显式确认后才能导出全部凭据' }),
+  }),
+});
+export type ExportCredentialsRequest = z.infer<typeof exportCredentialsRequestSchema>;
+
+/**
+ * 导出的统计走响应头 —— 正文是文件本身，没有地方放 JSON。
+ * 前端据此在下载后提示「有账号没被导出」，而不是让人以为备份是完整的。
+ */
+export const CREDENTIAL_EXPORT_COUNT_HEADER = 'x-firemail-export-count';
+export const CREDENTIAL_EXPORT_SKIPPED_HEADER = 'x-firemail-export-skipped';
 
 /**
  * 「测试连接」的结果。两条通道分别报告：

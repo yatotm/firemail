@@ -126,7 +126,30 @@ export function createContext(options: ContextOptions): AppContext {
     hub,
     { concurrency: config.syncConcurrency },
   );
-  const scheduler = new SyncScheduler({ db, runner }, { ...(log ? { log } : {}) });
+  const scheduler = new SyncScheduler(
+    { db, runner },
+    {
+      ...(log ? { log } : {}),
+      gapMs: config.syncGapMs,
+      policy: {
+        maxAttempts: config.syncMaxAttempts,
+        budgetMs: config.syncAccountBudgetMs,
+      },
+      suspendAfterRounds: config.syncSuspendAfterRounds,
+      suspendEnforce: config.syncSuspendEnforce,
+      // 层级切换与自动暂停不属于任何单个账号，走广播
+      onTier: (event) => hub.broadcast({ type: 'sync:tier', ...event }),
+      onSuspend: (decision, account) => {
+        if (!decision.enforced) return; // 只观察模式不打扰用户
+        hub.publish(account.userId, {
+          type: 'account:suspended',
+          accountId: account.id,
+          rounds: decision.rounds,
+          error: decision.error,
+        });
+      },
+    },
+  );
 
   const imageProxy = new ImageProxy({
     secret: loadImageProxySecret(sqlite, box, now()),

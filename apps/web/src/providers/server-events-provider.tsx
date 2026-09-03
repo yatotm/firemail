@@ -88,12 +88,25 @@ export function ServerEventsProvider({
     [queryClient, navigate],
   );
 
+  /**
+   * 连接的生命周期只能由 `enabled` 决定。
+   *
+   * 把 `handleEvent` 直接放进依赖数组是个陷阱：它 memo 在 `queryClient` / `navigate` 上，
+   * 其中任何一个哪天变得不稳定（换个 router、加个 `useLocation`），
+   * 每次渲染都会重建 EventSource —— 表现就是一两分钟一次的莫名重连。
+   * 这里改成 ref 取最新闭包，effect 与渲染彻底解耦。
+   */
+  const latestHandler = useRef(handleEvent);
+  useEffect(() => {
+    latestHandler.current = handleEvent;
+  }, [handleEvent]);
+
   useEffect(() => {
     if (!enabled) return;
 
     const client = new SseClient({
       url: eventsUrl,
-      onEvent: handleEvent,
+      onEvent: (event) => latestHandler.current(event),
       onStatus: setStatus,
       // 断线期间可能漏了事件，重连成功后整体刷一次
       onReconnected: () => void queryClient.invalidateQueries(),
@@ -101,15 +114,23 @@ export function ServerEventsProvider({
     client.start();
 
     let hiddenTimer: number | null = null;
+    let disconnectedWhileHidden = false;
     const onVisibilityChange = () => {
       if (document.hidden) {
-        hiddenTimer = window.setTimeout(() => client.stop(), HIDDEN_DISCONNECT_MS);
+        hiddenTimer = window.setTimeout(() => {
+          disconnectedWhileHidden = true;
+          client.stop();
+        }, HIDDEN_DISCONNECT_MS);
         return;
       }
       if (hiddenTimer !== null) {
         window.clearTimeout(hiddenTimer);
         hiddenTimer = null;
       }
+      // 连接一直没断就什么都没漏；只有真的断开过才值得全量刷一次，
+      // 否则每次切标签页都会把所有查询重取一遍
+      if (!disconnectedWhileHidden) return;
+      disconnectedWhileHidden = false;
       client.start();
       void queryClient.invalidateQueries();
     };
@@ -120,7 +141,7 @@ export function ServerEventsProvider({
       if (hiddenTimer !== null) window.clearTimeout(hiddenTimer);
       client.stop();
     };
-  }, [enabled, handleEvent, queryClient]);
+  }, [enabled, queryClient]);
 
   const value = useMemo(
     () => ({ status, syncingAccountIds, subscribe }),

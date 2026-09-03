@@ -1,53 +1,32 @@
 import type { Account } from '@firemail/shared';
-import { useMutation } from '@tanstack/react-query';
-import { useOptionalActivity } from '@/hooks/use-activity';
-import { api, humanizeApiError } from '@/lib/api';
-import { endpoints } from '@/lib/endpoints';
+import { useCallback, useMemo } from 'react';
+import { useSyncMutation } from '@/hooks/accounts/use-sync-mutation';
 import { scopeAccountId, type MailScope } from '@/lib/nav';
-import { showErrorToast, showInfoToast } from '@/lib/undo';
+
+export interface SyncScope {
+  mutate: () => void;
+  isPending: boolean;
+}
 
 /**
- * 同步当前作用域的账号（`Shift+R`）。
- * 服务端是 202 + SSE 推进度，所以这里不等结果，只负责发起和报错。
+ * 同步当前作用域的账号（顶栏按钮 / `Shift+R`）。
+ *
+ * 「全部账号」作用域是多账号，走第 2 层批量入口（**一次**请求，会抢占后台基线）；
+ * 单账号作用域走第 3 层。分层与失败落定都在 `useSyncMutation` 里，这里只挑目标。
  */
-export function useSyncScope(accounts: Account[], scope: MailScope) {
-  const activity = useOptionalActivity();
+export function useSyncScope(accounts: Account[], scope: MailScope): SyncScope {
+  const sync = useSyncMutation();
+  const targets = useMemo(() => scopeTargets(accounts, scope), [accounts, scope]);
+  const mutate = useCallback(() => {
+    sync.start(targets);
+  }, [sync, targets]);
 
-  return useMutation({
-    mutationKey: ['sync-scope'],
-    mutationFn: async () => {
-      const accountId = scopeAccountId(scope);
-      const targets = accounts.filter((account) =>
-        accountId === null ? account.status !== 'disabled' : account.id === accountId,
-      );
+  return { mutate, isPending: sync.isPending };
+}
 
-      // 请求发出前先记一笔「进行中」，顶栏的活动中心立刻可见
-      for (const account of targets) activity.begin('sync', account.id, account.email);
-
-      const results = await Promise.allSettled(
-        targets.map((account) => api.post(endpoints.syncAccount(account.id))),
-      );
-      results.forEach((result, index) => {
-        const account = targets[index];
-        if (account && result.status === 'rejected') {
-          activity.settle('sync', account.id, 'error', humanizeApiError(result.reason));
-        }
-      });
-      const failed = results.filter((result) => result.status === 'rejected');
-      const firstError: unknown = failed[0]?.reason;
-      return { requested: targets.length, failed: failed.length, firstError };
-    },
-    onSuccess: ({ requested, failed, firstError }) => {
-      if (requested === 0) {
-        showInfoToast('没有可同步的账号');
-        return;
-      }
-      if (failed > 0) {
-        showErrorToast(`${failed} 个账号无法发起同步`, firstError);
-        return;
-      }
-      showInfoToast(`已请求同步 ${requested} 个账号`);
-    },
-    onError: (error) => showErrorToast('同步请求失败', error),
-  });
+function scopeTargets(accounts: Account[], scope: MailScope): Account[] {
+  const accountId = scopeAccountId(scope);
+  return accounts.filter((account) =>
+    accountId === null ? account.status !== 'disabled' : account.id === accountId,
+  );
 }
