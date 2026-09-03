@@ -2,6 +2,7 @@ import type { ImapFlow } from 'imapflow';
 import type { Db, Sqlite } from '../db/client.ts';
 import type * as schema from '../db/schema.ts';
 import type { MailFailureKind } from '../providers/failures.ts';
+import type { AuthStrikes } from './authStrikes.ts';
 
 export type AccountRow = typeof schema.accounts.$inferSelect;
 export type FolderRow = typeof schema.folders.$inferSelect;
@@ -68,6 +69,13 @@ export interface SyncDeps {
   sqlite: Sqlite;
   connect: ImapConnect;
   log?: SyncLogger;
+  /**
+   * 跨轮同步共享的「认证被拒」连续失败计数。
+   * `SyncRunner` 会在缺省时自己建一个（生产上所有同步都经由它）；
+   * 直接调 `syncAccount` 又不给的话，每次都算第 1 次失败——
+   * 单次失败本来就不足以判定凭据失效，这个退化行为是安全的。
+   */
+  authStrikes?: AuthStrikes;
 }
 
 export interface FolderSyncResult {

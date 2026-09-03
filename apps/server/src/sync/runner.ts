@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_TIMEOUT_MS, syncAccount, type AccountSyncOptions } from './accountSync.ts';
+import { AuthStrikes } from './authStrikes.ts';
 import { BUSY, KeyedMutex, Semaphore } from './concurrency.ts';
 import type { AccountRow, AccountSyncResult, SyncDeps } from './types.ts';
 
@@ -41,7 +42,9 @@ export class SyncRunner {
     deps: SyncDeps,
     { concurrency = DEFAULT_CONCURRENCY, timeoutMs, syncDefaults }: SyncRunnerOptions = {},
   ) {
-    this.#deps = deps;
+    // 认证失败的连续计数必须跨轮同步存活，因此挂在 runner（进程内长生命周期）上，
+    // 而不是每次 syncAccount 现建一个——那样永远攒不够连续失败次数。
+    this.#deps = { ...deps, authStrikes: deps.authStrikes ?? new AuthStrikes() };
     this.#pool = new Semaphore(concurrency);
     this.#timeoutMs = timeoutMs ?? DEFAULT_ACCOUNT_TIMEOUT_MS;
     this.#defaults = syncDefaults ?? {};

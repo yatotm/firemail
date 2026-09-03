@@ -17,6 +17,8 @@
  *  - unknown   —— 配置错误（主机写错、端口不通）等：标 error，交给人看。
  */
 
+import { OAuthError } from '../auth/oauth/errors.ts';
+
 /** imapflow 在错误对象上实际会出现的字段（见 lib/imap-flow.js、lib/commands/authenticate.js）。 */
 interface MailErrorShape {
   code?: unknown;
@@ -89,6 +91,20 @@ const TRANSIENT_CODES = new Set([
  * 重试一万次也一样，落到 unknown 让账号标 error 才能被人看见。
  */
 
+/**
+ * Node 把 OpenSSL 记录层/握手失败统一成 `ERR_SSL_*`（另带 library='SSL routines'）。
+ *
+ * 生产实测：29 个账号并发同步时，偶发两条连接在 outlook.live.com:993 上收到
+ * `tls_validate_record_header:wrong version number`——同一分钟内另外 25 条到同一端点的
+ * TLS 连接全部正常，两个账号下一轮即自愈。端口与 secure 都是对的（993 + secure=true），
+ * 每条连接都是独立的 ImapFlow 实例、独立 socket，不存在复用或并发竞争，
+ * 所以这是上游/中间设备偶尔回了一段非 TLS 字节，属于网络抖动。
+ *
+ * 证书校验类失败（CERT_HAS_EXPIRED、UNABLE_TO_VERIFY_LEAF_SIGNATURE 等）不以 ERR_SSL_ 开头，
+ * 仍然落到 unknown——那是配置或中间人问题，必须有人看见。
+ */
+const TLS_RECORD_CODE = /^ERR_SSL_/;
+
 /** imapflow 自己识别出的 MS365 限流。 */
 const THROTTLE_CODE = 'ETHROTTLE';
 
@@ -135,19 +151,54 @@ const MAX_CAUSE_DEPTH = 5;
  * 于是限流又会被当成账号故障。所以逐层往里找，取第一个有结论的。
  */
 export function classifyMailFailure(cause: unknown): MailFailure {
+  for (const current of causeChain(cause)) {
+    const failure = classifyOne(current);
+    if (failure.kind !== 'unknown') return failure;
+  }
+  return classifyOne(cause);
+}
+
+/**
+ * 失败发生时，凭据是不是已经成功拿到手了（见 `ProviderError.credentialsResolved`）。
+ *
+ * 对 OAuth 账号，true 等于「刷新 + 轮换落库刚刚成功」，refresh token 是活的。
+ * 这一条比任何错误文本都硬：拿着一个刚铸出来的 access token 还被 IMAP 拒绝，
+ * 说明的是服务端此刻不想让我们进来，而不是凭据失效——后者必须靠持续失败来证明。
+ *
+ * 反过来 false 意味着建连根本没走到「带着凭据去认证」那一步：
+ * 唯一能在这种状态下产出认证类失败的就是凭据解析本身（terminal OAuthError），
+ * 那才是真的需要重新授权。
+ */
+export function credentialsWereResolved(cause: unknown): boolean {
+  for (const current of causeChain(cause)) {
+    if ((current as { credentialsResolved?: unknown }).credentialsResolved === true) return true;
+  }
+  return false;
+}
+
+/** 逐层遍历 `cause` 链，带深度上限与环检测。 */
+function* causeChain(cause: unknown): Generator<object> {
   const seen = new Set<unknown>();
   let current: unknown = cause;
 
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && current != null && !seen.has(current); depth += 1) {
     seen.add(current);
-    const failure = classifyOne(current);
-    if (failure.kind !== 'unknown') return failure;
+    if (typeof current === 'object') yield current;
     current = (current as { cause?: unknown }).cause;
   }
-  return classifyOne(cause);
 }
 
 function classifyOne(cause: unknown): MailFailure {
+  // OAuth 刷新这一步就失败了：token 服务已经给出了权威结论，不必再从文本里猜。
+  // 少了这一条，`invalid_grant`（refresh token 真的死了）会落到 unknown 被标成
+  // 普通 error，把 tokenStore 刚写好的 auth_error 覆盖掉；而一次 429/网络抖动
+  // 同样会落到 unknown，把一个完全健康的账号标红。
+  if (cause instanceof OAuthError) {
+    return cause.isTerminal
+      ? { kind: 'auth', retryAfterMs: null, signal: `OAuth ${cause.code}` }
+      : { kind: 'transient', retryAfterMs: cause.retryAfterMs, signal: `OAuth ${cause.code}` };
+  }
+
   const err = (cause ?? {}) as MailErrorShape;
   const code = upper(err.code);
   const responseCode = upper(err.serverResponseCode);
@@ -165,6 +216,7 @@ function classifyOne(cause: unknown): MailFailure {
   if (THROTTLE_TEXT.test(text)) return { kind: 'throttled', retryAfterMs, signal: '服务端要求降速' };
 
   if (TRANSIENT_CODES.has(code)) return { kind: 'transient', retryAfterMs, signal: code };
+  if (TLS_RECORD_CODE.test(code)) return { kind: 'transient', retryAfterMs, signal: code };
   if (TRANSIENT_RESPONSE_CODES.has(responseCode)) {
     return { kind: 'transient', retryAfterMs, signal: `[${responseCode}]` };
   }

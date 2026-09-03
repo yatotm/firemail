@@ -1,7 +1,13 @@
 import { eq } from 'drizzle-orm';
 import { computeBackoffMs } from '../auth/oauth/errors.ts';
 import { accounts, syncRuns } from '../db/schema.ts';
-import { classifyMailFailure, isRetryableFailure, type MailFailureKind } from '../providers/failures.ts';
+import {
+  classifyMailFailure,
+  credentialsWereResolved,
+  isRetryableFailure,
+  type MailFailureKind,
+} from '../providers/failures.ts';
+import { AuthStrikes } from './authStrikes.ts';
 import { sleep, withTimeout } from './concurrency.ts';
 import { syncFolder, throwIfAborted, type FolderSyncOptions } from './folderSync.ts';
 import { syncFolders } from './folders.ts';
@@ -109,7 +115,7 @@ export async function syncAccount(
   const finishedAt = Date.now();
 
   closeSyncRun(deps, runId, { finishedAt, newMessages, error });
-  updateAccountHealth(deps, account, { finishedAt, error, failureKind });
+  updateAccountHealth(deps, account, { finishedAt, error, failureKind, cause: failure });
 
   return {
     accountId: account.id,
@@ -198,6 +204,22 @@ function closeSyncRun(
     .run();
 }
 
+interface HealthInput {
+  finishedAt: number;
+  error: string | null;
+  failureKind: MailFailureKind | null;
+  /** 原始异常，用来读取「凭据是否已经拿到手」这个标记。 */
+  cause: unknown;
+}
+
+/**
+ * 认证失败的判定结论：
+ *  - dead    —— 凭据确实失效了，标 auth_error，重新授权有意义；
+ *  - pending —— 还说不准（凭据刚验证过、连续次数没到），只留痕迹不动 status；
+ *  - n/a     —— 这次失败根本不是认证类。
+ */
+type AuthVerdict = 'dead' | 'pending' | 'n/a';
+
 /**
  * 账号健康度。认证失败要和限流/网络抖动区分开：
  * 前者需要用户重新授权，后者退避几秒就好了，混在一起报警等于没报警。
@@ -206,35 +228,81 @@ function closeSyncRun(
  * 瞬时拒绝被标成 error，用户被要求去做一次毫无必要的设备码授权。
  * 只留 lastError 作为痕迹——静默吞掉同样是错的。
  */
-function updateAccountHealth(
-  deps: SyncDeps,
-  account: AccountRow,
-  {
-    finishedAt,
-    error,
-    failureKind,
-  }: { finishedAt: number; error: string | null; failureKind: MailFailureKind | null },
-): void {
-  const patch = healthPatch(error, failureKind, finishedAt);
+function updateAccountHealth(deps: SyncDeps, account: AccountRow, input: HealthInput): void {
+  // 没有注入计数器时退化成「每次都是第 1 次」：单次失败永远不够判定失效。
+  const counter = deps.authStrikes ?? new AuthStrikes();
+  const strikes = counter.record(account.id, input.failureKind);
+  const resolved = credentialsWereResolved(input.cause);
+  const verdict = input.failureKind === 'auth' ? judgeAuth(resolved, strikes, counter.threshold) : 'n/a';
 
+  if (verdict === 'pending') {
+    deps.log?.warn('认证被拒，但凭据刷新是成功的；连续失败达标前不改账号状态', {
+      accountId: account.id,
+      strikes,
+      threshold: counter.threshold,
+    });
+  }
+
+  const patch = healthPatch(input, { verdict, resolved, strikes, threshold: counter.threshold });
   deps.db
     .update(accounts)
-    .set({ ...patch, updatedAt: new Date(finishedAt) })
+    .set({ ...patch, updatedAt: new Date(input.finishedAt) })
     .where(eq(accounts.id, account.id))
     .run();
 }
 
+/** 判定所依据的两个信号 + 结论，只在 updateAccountHealth 与它的两个小助手之间传递。 */
+interface AuthAssessment {
+  verdict: AuthVerdict;
+  /** 信号一：失败发生时凭据是否已经到手。 */
+  resolved: boolean;
+  /** 信号二：连续认证失败次数与门槛。 */
+  strikes: number;
+  threshold: number;
+}
+
+/**
+ * 「认证被拒」到底说明了什么。
+ *
+ * `err.authenticationFailed` 对**任何** AUTHENTICATE 失败都为 true，而 Outlook 限流时
+ * 并不总是带上限流码，所以一条光秃秃的 AUTHENTICATIONFAILED 在「凭据失效」和
+ * 「你被限流了」之间是有歧义的，光靠错误对象解不开。用两个独立信号来解：
+ *
+ *  1. 凭据这一步过没过去（`credentialsWereResolved`）。没过去 —— 刷新被 Microsoft 拒了，
+ *     refresh token 真的死了，立刻标红；过去了 —— 手里的 access token 是刚铸出来的，
+ *     这一次被拒证明不了任何关于凭据的事。
+ *  2. 持续性。凭据没问题却一直进不去，连续到 `threshold` 轮才下结论——
+ *     生产实测瞬时限流最多连着 6 轮就自愈了。
+ */
+function judgeAuth(resolved: boolean, strikes: number, threshold: number): AuthVerdict {
+  if (!resolved) return 'dead';
+  return strikes >= threshold ? 'dead' : 'pending';
+}
+
 function healthPatch(
-  error: string | null,
-  failureKind: MailFailureKind | null,
-  finishedAt: number,
+  { error, failureKind, finishedAt }: HealthInput,
+  auth: AuthAssessment,
 ): Record<string, unknown> {
   if (error === null) {
     return { status: 'active', lastError: null, lastErrorAt: null, lastSyncedAt: new Date(finishedAt) };
   }
-  const trace = { lastError: error.slice(0, 2000), lastErrorAt: new Date(finishedAt) };
+  const trace = { lastError: annotate(error, auth).slice(0, 2000), lastErrorAt: new Date(finishedAt) };
   if (failureKind === 'throttled' || failureKind === 'transient') return trace;
-  return { ...trace, status: failureKind === 'auth' ? 'auth_error' : 'error' };
+  // 未达门槛的认证失败与限流同等对待：只留痕迹，不动 status。
+  if (auth.verdict === 'pending') return trace;
+  return { ...trace, status: auth.verdict === 'dead' ? 'auth_error' : 'error' };
+}
+
+/** 让 lastError 说的和代码做的一致：没下结论就别写得像已经下了结论。 */
+function annotate(error: string, { verdict, resolved, strikes, threshold }: AuthAssessment): string {
+  if (verdict === 'pending') {
+    return `${error}（连续第 ${strikes}/${threshold} 次被拒，本轮凭据刷新是成功的，暂按瞬时故障处理）`;
+  }
+  // 凭据这一步就失败了：错误原文（OAuth 的 AADSTS 文案）已经把结论说清楚了，不必再加。
+  if (verdict === 'dead' && resolved) {
+    return `${error}（已连续 ${strikes} 次被拒，判定凭据失效，需要用设备码重新授权）`;
+  }
+  return error;
 }
 
 async function closeQuietly(client: ImapClient | null, deps: SyncDeps): Promise<void> {

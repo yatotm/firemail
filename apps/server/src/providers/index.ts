@@ -10,6 +10,7 @@ export { AccountCredentialResolver } from './credentials.ts';
 export {
   SMTP_SUBMISSION_DISABLED_MESSAGE,
   classifyMailFailure,
+  credentialsWereResolved,
   isRetryableFailure,
   isSmtpSubmissionDisabled,
   type MailFailure,
@@ -28,6 +29,7 @@ export { QqProvider } from './qq.ts';
 export { createProviderRegistry, type ProviderRegistry } from './registry.ts';
 export {
   ProviderError,
+  type ProviderErrorOptions,
   type AccountRow,
   type ConnectionSettings,
   type CredentialResolver,

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { OAuthError } from '../auth/oauth/errors.ts';
 import { isAuthFailure, smtpStatusOf } from './base.ts';
 import {
   SMTP_SUBMISSION_DISABLED_MESSAGE,
   classifyMailFailure,
+  credentialsWereResolved,
   isRetryableFailure,
   isSmtpSubmissionDisabled,
 } from './failures.ts';
@@ -260,4 +262,96 @@ test('整条链都没有结论时返回最外层的 unknown', () => {
   const failure = classifyMailFailure(new ProviderError('外层', inner));
 
   assert.equal(failure.kind, 'unknown');
+});
+
+// ---------------------------------------------------------------------------
+// TLS 握手：生产上偶发，端口与 secure 都没错
+// ---------------------------------------------------------------------------
+
+/** node 把 OpenSSL 的失败编成 ERR_SSL_* + reason/library，见 tls_validate_record_header。 */
+function tlsError(reason: string, code: string): Error {
+  return Object.assign(new Error(`58A2:error:0A00010B:SSL routines:tls_validate_record_header:${reason}:x.c:77:`), {
+    code,
+    reason,
+    library: 'SSL routines',
+  });
+}
+
+test('TLS 记录层/握手失败算网络抖动：会重试，且绝不动账号状态', () => {
+  const failure = classifyMailFailure(tlsError('wrong version number', 'ERR_SSL_WRONG_VERSION_NUMBER'));
+
+  assert.equal(failure.kind, 'transient');
+  assert.equal(isRetryableFailure(failure), true);
+  assert.equal(failure.signal, 'ERR_SSL_WRONG_VERSION_NUMBER');
+});
+
+test('TLS 抖动包在 ProviderError 里同样能认出来', () => {
+  const inner = tlsError('packet length too long', 'ERR_SSL_PACKET_LENGTH_TOO_LONG');
+  assert.equal(kind(new ProviderError('IMAP 连接失败: ...', inner)), 'transient');
+});
+
+test('证书校验失败不算抖动：那是配置或中间人问题，必须有人看见', () => {
+  for (const code of ['CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT']) {
+    assert.equal(kind(Object.assign(new Error('cert'), { code })), 'unknown', code);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// OAuth：刷新这一步的失败自己就是结论，不该再从文本里猜
+// ---------------------------------------------------------------------------
+
+test('刷新被拒（terminal）就是认证失败：否则会落到 unknown，把账号标成普通 error', () => {
+  const dead = new OAuthError('refresh token 无效或已被吊销，需要重新授权', {
+    kind: 'terminal',
+    code: 'invalid_grant',
+    status: 400,
+    aadCodes: [70000],
+  });
+
+  const failure = classifyMailFailure(dead);
+
+  assert.equal(failure.kind, 'auth');
+  assert.equal(isRetryableFailure(failure), false);
+  assert.equal(isAuthFailure(dead), true);
+});
+
+test('刷新时的临时故障是抖动：一次 429 / 网络错误不该让账号变红', () => {
+  const blip = new OAuthError('Microsoft 授权服务暂时不可用（HTTP 429 / http_429）', {
+    kind: 'transient',
+    code: 'http_429',
+    status: 429,
+    retryAfterMs: 30_000,
+  });
+
+  const failure = classifyMailFailure(blip);
+
+  assert.equal(failure.kind, 'transient');
+  assert.equal(failure.retryAfterMs, 30_000, '服务端给的 Retry-After 要带出来');
+  assert.equal(isRetryableFailure(failure), true);
+});
+
+// ---------------------------------------------------------------------------
+// 凭据到手与否：判「是不是真要重新授权」唯一不含歧义的信号
+// ---------------------------------------------------------------------------
+
+test('凭据解析成功之后才失败的错误带着标记，且能穿透包装层读出来', () => {
+  const inner = imapNo('AUTHENTICATIONFAILED', 'AUTHENTICATE failed.', { authenticationFailed: true });
+  const wrapped = new ProviderError('Outlook IMAP 认证被拒绝。', inner, { credentialsResolved: true });
+
+  assert.equal(wrapped.credentialsResolved, true);
+  assert.equal(credentialsWereResolved(wrapped), true);
+  assert.equal(kind(wrapped), 'auth', '仍然是认证类失败，只是不再等于「凭据失效」');
+});
+
+test('没走到凭据那一步的失败没有标记；null / 字符串等非对象也不会抛', () => {
+  assert.equal(credentialsWereResolved(new ProviderError('IMAP 连接失败')), false);
+  assert.equal(
+    credentialsWereResolved(
+      new OAuthError('refresh token 已过期', { kind: 'terminal', code: 'invalid_grant' }),
+    ),
+    false,
+  );
+  for (const cause of [null, undefined, 'boom', 42, {}]) {
+    assert.equal(credentialsWereResolved(cause), false, String(cause));
+  }
 });

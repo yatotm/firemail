@@ -56,9 +56,25 @@ export interface MailProvider {
   verify(account: AccountRow): Promise<VerifyResult>;
 }
 
+export interface ProviderErrorOptions {
+  /**
+   * 抛错时凭据是不是已经拿到手了。
+   *
+   * true 只由 `connectImap` 在「凭据解析成功、之后建连失败」这一条路径上设置，
+   * 对 OAuth 账号它等价于「刷新 + 轮换落库刚刚成功过」。
+   * 有了它，同步层判断「认证被拒是不是说明 refresh token 死了」就不必去猜错误对象，
+   * 而是直接读这个事实——这是唯一一个不含歧义的信号。
+   */
+  credentialsResolved?: boolean;
+}
+
 export class ProviderError extends Error {
-  constructor(message: string, cause?: unknown) {
+  /** 见 ProviderErrorOptions.credentialsResolved。 */
+  readonly credentialsResolved: boolean;
+
+  constructor(message: string, cause?: unknown, options: ProviderErrorOptions = {}) {
     super(message, cause === undefined ? undefined : { cause });
     this.name = 'ProviderError';
+    this.credentialsResolved = options.credentialsResolved === true;
   }
 }

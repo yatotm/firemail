@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 import { eq } from 'drizzle-orm';
+import { OAuthError } from '../auth/oauth/errors.ts';
 import { MicrosoftOAuthClient } from '../auth/oauth/microsoftClient.ts';
 import { OAuthTokenService } from '../auth/oauth/tokenService.ts';
 import { OAuthTokenStore } from '../auth/oauth/tokenStore.ts';
@@ -9,6 +10,7 @@ import { createDb, openSqlite, type Db } from '../db/client.ts';
 import { applyMigrations } from '../db/migrate.ts';
 import { accounts, users } from '../db/schema.ts';
 import { AccountCredentialResolver } from './credentials.ts';
+import { classifyMailFailure, credentialsWereResolved } from './failures.ts';
 import { GenericImapProvider } from './genericImap.ts';
 import { GmailProvider } from './gmail.ts';
 import { OutlookProvider } from './outlook.ts';
@@ -284,6 +286,44 @@ test('建连会把账号行原样交给凭据解析器（OAuth 账号因此必�
   await assert.rejects(() => provider.connectImap(account));
   assert.equal(resolver.calls.length, 1);
   assert.equal(resolver.calls[0]?.id, 1);
+});
+
+test('凭据到手之后的建连失败必须打上标记：同步层靠它区分限流与凭据失效', async () => {
+  const provider = new OutlookProvider({
+    credentials: recordingResolver({
+      kind: 'oauth2',
+      user: 'user@outlook.com',
+      accessToken: NEW_ACCESS,
+    }),
+    timeouts: { connectionMs: 2000, greetingMs: 2000, socketMs: 2000 },
+  });
+  const account = { ...ctx.row(1), imapHost: '127.0.0.1', imapPort: CLOSED_PORT, imapSecure: false };
+
+  const error = await provider.connectImap(account).catch((cause: unknown) => cause);
+
+  assert.ok(error instanceof ProviderError);
+  assert.equal(error.credentialsResolved, true, 'token 刷新已经成功过，这是最硬的那个信号');
+  assert.equal(credentialsWereResolved(error), true);
+});
+
+test('凭据这一步就失败时不打标记：那才是真的需要重新授权', async () => {
+  const provider = new OutlookProvider({
+    credentials: {
+      resolve: async () => {
+        throw new OAuthError('refresh token 无效或已被吊销，需要重新授权', {
+          kind: 'terminal',
+          code: 'invalid_grant',
+          status: 400,
+          aadCodes: [70000],
+        });
+      },
+    },
+  });
+
+  const error = await provider.connectImap(ctx.row(1)).catch((cause: unknown) => cause);
+
+  assert.equal(credentialsWereResolved(error), false);
+  assert.equal(classifyMailFailure(error).kind, 'auth');
 });
 
 test('SMTP 通道用 OAuth2 时只交出 access token，不交出 refresh token / client secret', async () => {

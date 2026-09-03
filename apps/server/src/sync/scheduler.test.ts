@@ -3,6 +3,8 @@ import { after, test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { eq } from 'drizzle-orm';
 import { accounts } from '../db/schema.ts';
+import { ProviderError } from '../providers/types.ts';
+import { DEFAULT_AUTH_STRIKE_THRESHOLD } from './authStrikes.ts';
 import { SyncRunner } from './runner.ts';
 import { MIN_INTERVAL_SECONDS, SyncScheduler } from './scheduler.ts';
 import { cleanupScratch, eml, FakeImap, makeDb, seedAccount } from './__testkit__/index.ts';
@@ -314,6 +316,45 @@ test('认证失败不触发降频：那是账号自己的问题，不是限流',
   assert.equal(sched.cooldownMultiplier(account.id), 1);
   const row = h.deps.db.select().from(accounts).where(eq(accounts.id, account.id)).get();
   assert.equal(row?.status, 'auth_error');
+  h.close();
+});
+
+test('跨轮同步共享连续失败计数：token 有效的账号被瞬时拒绝多轮也不标红', async () => {
+  const h = harness();
+  const account = seedAccount(h.deps.db, { syncIntervalSeconds: 300 });
+  // 真实链路的形状：凭据刷新成功之后 IMAP 才拒绝，错误带着「凭据已到手」的标记
+  const rejected = new ProviderError(
+    'Outlook IMAP 认证被拒绝。',
+    Object.assign(new Error('Command failed'), {
+      serverResponseCode: 'AUTHENTICATIONFAILED',
+      authenticationFailed: true,
+    }),
+    { credentialsResolved: true },
+  );
+  const gate: { fail: Error | null } = { fail: rejected };
+  const sched = scheduler(h, flakyRunner(h, gate));
+  const status = () =>
+    h.deps.db.select().from(accounts).where(eq(accounts.id, account.id)).get()?.status;
+
+  for (let round = 0; round < DEFAULT_AUTH_STRIKE_THRESHOLD - 1; round += 1) {
+    await sched.tick();
+    h.clock.now += 300_000;
+    assert.equal(status(), 'active', `第 ${round + 1} 轮不该标红`);
+  }
+
+  await sched.tick();
+  assert.equal(status(), 'auth_error', '连续到门槛才判定失效');
+
+  // 计数活在 runner 里，因此一次成功同步之后要重新攒
+  gate.fail = null;
+  h.clock.now += 300_000;
+  await sched.tick();
+  assert.equal(status(), 'active');
+
+  gate.fail = rejected;
+  h.clock.now += 300_000;
+  await sched.tick();
+  assert.equal(status(), 'active', '成功清零后，下一次失败又是第 1 次');
   h.close();
 });
 

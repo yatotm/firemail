@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { OAuthError } from '../auth/oauth/errors.ts';
 import { ProviderError } from '../providers/types.ts';
 import { syncAccount } from './accountSync.ts';
+import { AuthStrikes } from './authStrikes.ts';
 import { cleanupScratch, eml, FakeImap, makeDb, seedAccount } from './__testkit__/index.ts';
 import { NOOP_LOGGER, type AccountRow, type ImapClient, type SyncDeps } from './types.ts';
 
@@ -150,17 +152,17 @@ test('连接失败记为 error，last_synced_at 不动', async () => {
   f.close();
 });
 
-test('认证失败单独标成 auth_error，需要用户重新授权', async () => {
-  const authError = Object.assign(new Error('Invalid credentials'), {
-    authenticationFailed: true,
-    serverResponseCode: 'AUTHENTICATIONFAILED',
-  });
-  const server = new FakeImap({ mailboxes: [], connectError: authError });
+test('刷新这一步就被拒（refresh token 真的失效）：第一次失败就标 auth_error', async () => {
+  const server = new FakeImap({ mailboxes: [], connectError: refreshRejected() });
   const f = fixture(server);
 
-  await syncAccount(f.deps, f.account);
+  const result = await syncAccount(f.deps, f.account);
 
-  assert.equal(accountRow(f.sqlite, f.account.id).status, 'auth_error');
+  assert.equal(result.failureKind, 'auth');
+  const row = accountRow(f.sqlite, f.account.id);
+  assert.equal(row.status, 'auth_error', '凭据这一步就没过去，等下去没有任何意义');
+  assert.match(row.last_error ?? '', /重新授权/);
+  assert.doesNotMatch(row.last_error ?? '', /连续第/, '这条路径不靠持续性判定，别加计数说明');
   f.close();
 });
 
@@ -324,14 +326,10 @@ test('网络抖动同样不动账号状态', async () => {
   f.close();
 });
 
-test('认证失败不重试：一次就走人，账号标 auth_error', async () => {
-  const authError = Object.assign(new Error('Invalid credentials'), {
-    authenticationFailed: true,
-    serverResponseCode: 'AUTHENTICATIONFAILED',
-  });
+test('认证失败不重试：一次就走人，不在同一轮里反复撞', async () => {
   const server = new FakeImap({ mailboxes: [] });
   const f = fixture(server);
-  const flaky = failingConnect(server, 99, authError);
+  const flaky = failingConnect(server, 99, rejectedAfterRefresh());
   const clock = fakeSleep();
 
   const result = await syncAccount({ ...f.deps, connect: flaky.connect }, f.account, {
@@ -341,7 +339,6 @@ test('认证失败不重试：一次就走人，账号标 auth_error', async () 
   assert.equal(result.failureKind, 'auth');
   assert.equal(flaky.calls, 1, '凭据被拒重试一万次也一样，只会给上游加压');
   assert.equal(clock.waits.length, 0);
-  assert.equal(accountRow(f.sqlite, f.account.id).status, 'auth_error');
   f.close();
 });
 
@@ -419,6 +416,178 @@ test('成功同步的 failureKind 是 null', async () => {
   const f = fixture(server);
 
   assert.equal((await syncAccount(f.deps, f.account)).failureKind, null);
+  f.close();
+});
+
+// ---------------------------------------------------------------------------
+// 认证被拒的判定：两个独立信号（凭据是否刚刷新成功 + 连续失败次数）都要满足
+//
+// 生产实测（29 个 Outlook 账号、5 分钟周期）：token 明明有效的账号会被瞬时拒绝，
+// 最长连续失败 6 轮后自行恢复。旧代码一次就标 auth_error，把用户推去做
+// 毫无必要的设备码授权——下面这组用例就是那条 bug 的回归防线。
+// ---------------------------------------------------------------------------
+
+/** 真实链路的形状：imapflow 的 AUTHENTICATIONFAILED 被 provider 包起来，并标明凭据已到手。 */
+function rejectedAfterRefresh(): ProviderError {
+  const inner = Object.assign(new Error('Command failed'), {
+    responseStatus: 'NO',
+    serverResponseCode: 'AUTHENTICATIONFAILED',
+    responseText: 'AUTHENTICATE failed.',
+    authenticationFailed: true,
+  });
+  return new ProviderError('Outlook IMAP 认证被拒绝。', inner, { credentialsResolved: true });
+}
+
+/** 另一条链路：刷新那一步就被 Microsoft 拒了，凭据根本没拿到手。 */
+function refreshRejected(): OAuthError {
+  return new OAuthError('refresh token 无效或已被吊销，需要重新授权', {
+    kind: 'terminal',
+    code: 'invalid_grant',
+    status: 400,
+    aadCodes: [70000],
+  });
+}
+
+/** 共用一个计数器的多轮同步，模拟调度器每 5 分钟跑一轮。 */
+async function rounds(
+  f: ReturnType<typeof fixture>,
+  strikes: AuthStrikes,
+  connect: () => Promise<ImapClient>,
+  times: number,
+): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await syncAccount({ ...f.deps, connect, authStrikes: strikes }, f.account, { sleep: async () => {} });
+  }
+}
+
+test('token 刚刷新成功却被 IMAP 拒绝：不标 auth_error，但必须留下 last_error', async () => {
+  const server = new FakeImap({ mailboxes: [], connectError: rejectedAfterRefresh() });
+  const f = fixture(server);
+  const strikes = new AuthStrikes();
+
+  const result = await syncAccount({ ...f.deps, authStrikes: strikes }, f.account);
+
+  assert.equal(result.status, 'error');
+  assert.equal(result.failureKind, 'auth');
+  const row = accountRow(f.sqlite, f.account.id);
+  assert.equal(row.status, 'active', '刷新刚成功过，一次被拒证明不了 refresh token 失效');
+  assert.notEqual(row.last_error, null, '不动状态不等于静默吞掉');
+  assert.match(row.last_error ?? '', /连续第 1\/8 次/, '提示要说清这是第几次，别装作已经下了结论');
+  assert.equal(row.last_synced_at, null, '没真正同步过就不能刷新 last_synced_at');
+  assert.equal(strikes.count(f.account.id), 1);
+  f.close();
+});
+
+test('连续 8 次认证被拒才判定凭据失效，第 7 次仍然不标红', async () => {
+  const server = new FakeImap({ mailboxes: [], connectError: rejectedAfterRefresh() });
+  const f = fixture(server);
+  const strikes = new AuthStrikes();
+
+  await rounds(f, strikes, server.connect, 7);
+  assert.equal(accountRow(f.sqlite, f.account.id).status, 'active', '门槛之下一律不动状态');
+
+  await rounds(f, strikes, server.connect, 1);
+
+  const row = accountRow(f.sqlite, f.account.id);
+  assert.equal(row.status, 'auth_error');
+  assert.match(row.last_error ?? '', /已连续 8 次被拒/);
+  assert.match(row.last_error ?? '', /重新授权/);
+  f.close();
+});
+
+test('中途成功一次就清零：连续性必须从头再数', async () => {
+  const server = new FakeImap({ mailboxes: outlookMailboxes() });
+  const f = fixture(server);
+  const strikes = new AuthStrikes();
+  const rejecting = async (): Promise<ImapClient> => {
+    throw rejectedAfterRefresh();
+  };
+
+  await rounds(f, strikes, rejecting, 7);
+  await rounds(f, strikes, server.connect, 1);
+
+  const recovered = accountRow(f.sqlite, f.account.id);
+  assert.equal(recovered.status, 'active');
+  assert.equal(recovered.last_error, null, '成功一次要把痕迹擦干净');
+  assert.equal(strikes.count(f.account.id), 0);
+
+  await rounds(f, strikes, rejecting, 7);
+  assert.equal(accountRow(f.sqlite, f.account.id).status, 'active', '清零后要重新攒够 8 次');
+  f.close();
+});
+
+test('计数按账号隔离：一个账号被拒不会连累另一个', async () => {
+  const server = new FakeImap({ mailboxes: [], connectError: rejectedAfterRefresh() });
+  const f = fixture(server);
+  const other = seedAccount(f.db, { email: 'b@outlook.com' });
+  const strikes = new AuthStrikes();
+
+  await rounds(f, strikes, server.connect, 7);
+  await syncAccount({ ...f.deps, authStrikes: strikes }, other);
+
+  assert.equal(strikes.count(f.account.id), 7);
+  assert.equal(strikes.count(other.id), 1);
+  assert.equal(accountRow(f.sqlite, other.id).status, 'active');
+  f.close();
+});
+
+test('不注入计数器时退化成「每次都是第 1 次」：单次失败绝不标红', async () => {
+  const server = new FakeImap({ mailboxes: [], connectError: rejectedAfterRefresh() });
+  const f = fixture(server);
+
+  for (let i = 0; i < 3; i += 1) await syncAccount(f.deps, f.account);
+
+  assert.equal(accountRow(f.sqlite, f.account.id).status, 'active');
+  f.close();
+});
+
+test('TLS 握手失败按网络抖动处理：不动账号状态', async () => {
+  // 生产实测原文，出现在 outlook.live.com:993 + secure=true 上，同一分钟内其它连接全部正常
+  const tls = Object.assign(
+    new Error(
+      '58A25499497F0000:error:0A00010B:SSL routines:tls_validate_record_header:' +
+        'wrong version number:../deps/openssl/openssl/ssl/record/methods/tlsany_meth.c:77:',
+    ),
+    { code: 'ERR_SSL_WRONG_VERSION_NUMBER', reason: 'wrong version number', library: 'SSL routines' },
+  );
+  const server = new FakeImap({
+    mailboxes: [],
+    connectError: new ProviderError('IMAP 连接失败: TLS 握手失败', tls, { credentialsResolved: true }),
+  });
+  const f = fixture(server);
+
+  const result = await syncAccount(f.deps, f.account, { sleep: async () => {} });
+
+  assert.equal(result.failureKind, 'transient');
+  const row = accountRow(f.sqlite, f.account.id);
+  assert.equal(row.status, 'active', 'TLS 抖动不是账号的问题');
+  assert.notEqual(row.last_error, null);
+  f.close();
+});
+
+test('刷新时的网络抖动同样不标红：Microsoft 抽风不是账号坏了', async () => {
+  const blip = new OAuthError('连接 Microsoft 授权服务失败: fetch failed', {
+    kind: 'transient',
+    code: 'network',
+  });
+  const server = new FakeImap({ mailboxes: [], connectError: blip });
+  const f = fixture(server);
+
+  const result = await syncAccount(f.deps, f.account, { sleep: async () => {} });
+
+  assert.equal(result.failureKind, 'transient');
+  assert.equal(accountRow(f.sqlite, f.account.id).status, 'active');
+  f.close();
+});
+
+test('sync_runs 记录的是原始错误，判定说明只写进账号的 last_error', async () => {
+  const server = new FakeImap({ mailboxes: [], connectError: rejectedAfterRefresh() });
+  const f = fixture(server);
+
+  await syncAccount({ ...f.deps, authStrikes: new AuthStrikes() }, f.account);
+
+  assert.doesNotMatch(runs(f.sqlite)[0]?.error ?? '', /连续第/, '同步流水记录发生了什么，不记结论');
+  assert.match(accountRow(f.sqlite, f.account.id).last_error ?? '', /连续第/);
   f.close();
 });
 

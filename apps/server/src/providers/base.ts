@@ -80,7 +80,10 @@ export abstract class BaseMailProvider implements MailProvider {
       await client.connect();
     } catch (cause) {
       client.close();
-      throw new ProviderError(this.describeFailure(cause, 'imap'), cause);
+      // 凭据是上面 resolve() 出来的，走到这里说明它成功了：OAuth 账号意味着
+      // 刷新与轮换落库刚刚发生过。同步层靠这个标记区分「refresh token 死了」
+      // 和「握着有效 token 仍被服务端拒绝」，后者多半是限流。
+      throw new ProviderError(this.describeFailure(cause, 'imap'), cause, { credentialsResolved: true });
     }
     return client;
   }
