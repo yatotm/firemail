@@ -1,4 +1,0 @@
-Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
-Requirement already satisfied: mail-parser in c:\users\administrator\appdata\local\programs\python\python313\lib\site-packages (4.1.2)
-Requirement already satisfied: ipaddress in c:\users\administrator\appdata\local\programs\python\python313\lib\site-packages (from mail-parser) (1.0.23)
-Requirement already satisfied: six in c:\users\administrator\appdata\local\programs\python\python313\lib\site-packages (from mail-parser) (1.17.0)
