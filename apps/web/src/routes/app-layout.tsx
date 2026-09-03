@@ -3,6 +3,7 @@ import { ListSkeleton } from '@/components/common/skeletons';
 import { AppShell } from '@/components/layout/app-shell';
 import { useAuth } from '@/hooks/use-auth';
 import { routePaths } from '@/lib/nav';
+import { ActivityProvider } from '@/providers/activity-provider';
 import { AuthProvider } from '@/providers/auth-provider';
 import { ServerEventsProvider } from '@/providers/server-events-provider';
 
@@ -44,7 +45,9 @@ export function AppLayout() {
 
   return (
     <ServerEventsProvider>
-      <AppShell />
+      <ActivityProvider>
+        <AppShell />
+      </ActivityProvider>
     </ServerEventsProvider>
   );
 }

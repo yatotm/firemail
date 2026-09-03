@@ -190,3 +190,131 @@ test('停机后 POST /api/messages/send 回错误信封而不是 202', async () 
     await t.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// 收信 / 发信健康度分离
+// ---------------------------------------------------------------------------
+
+/** 生产上「测试连接」实际打出来的那条 SMTP 错误。 */
+const SMTP_DISABLED_ERROR = Object.assign(
+  new Error(
+    'Invalid login: 535 5.7.139 Authentication unsuccessful, ' +
+      'SmtpClientAuthentication is disabled for the Mailbox. ' +
+      'Visit https://aka.ms/smtp_auth_disabled for more information.',
+  ),
+  { code: 'EAUTH', responseCode: 535 },
+);
+
+/** SMTP 一律抛错。 */
+function failingSmtp(error: Error): TransportFactory {
+  return async () =>
+    ({
+      async sendMail() {
+        throw error;
+      },
+      close() {},
+    }) as unknown as Transporter;
+}
+
+function okSmtp(): TransportFactory {
+  return async () =>
+    ({
+      async sendMail(mail: { envelope: { from: string; to: string[] } }) {
+        return { envelope: mail.envelope, accepted: mail.envelope.to, rejected: [] };
+      },
+      close() {},
+    }) as unknown as Transporter;
+}
+
+test('邮箱侧关闭了 SMTP：账号不被标红，只把发信能力记成 disabled', async () => {
+  const f = await fixture(failingSmtp(SMTP_DISABLED_ERROR));
+  try {
+    const job = await f.send.wait(f.submit().id);
+    assert.ok(job);
+
+    assert.equal(job.status, 'failed');
+    assert.equal(job.error?.retryable, false);
+
+    const account = f.t.ctx.accounts.get(f.user.id, job.accountId);
+    assert.equal(account?.status, 'active', '收信完全正常，绝不能因为发不出去就把账号标红');
+    assert.equal(account?.smtpStatus, 'disabled');
+    assert.equal(account?.lastError, null, '发信故障不写进收信的 last_error');
+    assert.match(account?.smtpError ?? '', /https:\/\/aka\.ms\/smtp_auth_disabled/);
+    assert.ok(account?.smtpCheckedAt);
+  } finally {
+    await f.t.close();
+  }
+});
+
+test('535 5.7.139 的提示说清重新授权没用，绝不引导去做设备码', async () => {
+  const f = await fixture(failingSmtp(SMTP_DISABLED_ERROR));
+  try {
+    const job = await f.send.wait(f.submit().id);
+    assert.ok(job);
+
+    assert.match(job.error?.message ?? '', /重新授权不能解决/);
+    assert.match(job.error?.message ?? '', /收信（IMAP）不受影响/);
+    assert.doesNotMatch(job.error?.message ?? '', /设备码/);
+  } finally {
+    await f.t.close();
+  }
+});
+
+test('SMTP 被关掉之后仍然可以继续提交发信请求（账号没有被连坐禁用）', async () => {
+  const f = await fixture(failingSmtp(SMTP_DISABLED_ERROR));
+  try {
+    await f.send.wait(f.submit().id);
+    // 旧行为会把账号标成 auth_error，第二次 submit 直接被拒
+    assert.doesNotThrow(() => f.submit());
+  } finally {
+    await f.t.close();
+  }
+});
+
+test('真的凭据被拒才标 auth_error，两个字段同时置位', async () => {
+  const authError = Object.assign(new Error('Invalid login: 535 5.7.3 Authentication unsuccessful'), {
+    code: 'EAUTH',
+    responseCode: 535,
+  });
+  const f = await fixture(failingSmtp(authError));
+  try {
+    const job = await f.send.wait(f.submit().id);
+    assert.ok(job);
+
+    assert.equal(job.error?.kind, 'auth');
+    const account = f.t.ctx.accounts.get(f.user.id, job.accountId);
+    assert.equal(account?.status, 'auth_error');
+    assert.equal(account?.smtpStatus, 'auth_error');
+  } finally {
+    await f.t.close();
+  }
+});
+
+test('发信成功把发信能力记成 ok', async () => {
+  const f = await fixture(okSmtp());
+  try {
+    const job = await f.send.wait(f.submit().id);
+    assert.ok(job);
+
+    assert.equal(job.status, 'sent');
+    const account = f.t.ctx.accounts.get(f.user.id, job.accountId);
+    assert.equal(account?.smtpStatus, 'ok');
+    assert.equal(account?.smtpError, null);
+  } finally {
+    await f.t.close();
+  }
+});
+
+test('网络抖动说明不了发信能力好坏，不覆盖既有判定', async () => {
+  const f = await fixture(failingSmtp(Object.assign(new Error('socket hang up'), { code: 'ESOCKET' })));
+  try {
+    f.t.ctx.accounts.setSmtpHealth(1, 'ok', null);
+    const job = await f.send.wait(f.submit().id);
+    assert.ok(job);
+
+    assert.equal(job.error?.kind, 'transient');
+    assert.equal(f.t.ctx.accounts.get(f.user.id, job.accountId)?.smtpStatus, 'ok');
+  } finally {
+    await f.t.close();
+  }
+});

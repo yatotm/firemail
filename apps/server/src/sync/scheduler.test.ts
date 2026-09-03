@@ -216,6 +216,118 @@ test('triggerNow 排队执行而不是被跳过', async () => {
   h.close();
 });
 
+// ---------------------------------------------------------------------------
+// 被限流账号的临时降频
+// ---------------------------------------------------------------------------
+
+/** imapflow 在 Outlook 限流时真实产出的错误形状。 */
+const THROTTLE_ERROR = Object.assign(new Error('Command failed'), {
+  responseStatus: 'BAD',
+  responseText: 'Request is throttled. Suggested Backoff Time: 5000 milliseconds',
+  code: 'ETHROTTLE',
+  throttleReset: 5_000,
+});
+
+/** 建连结果由 `fail` 开关决定；退避不真的等，否则一个用例要跑十几秒。 */
+function flakyRunner(h: Harness, gate: { fail: Error | null }): SyncRunner {
+  return new SyncRunner(
+    {
+      ...h.deps,
+      connect: async () => {
+        if (gate.fail) throw gate.fail;
+        return h.server.connect();
+      },
+    },
+    { concurrency: 2, syncDefaults: { sleep: async () => {} } },
+  );
+}
+
+test('被限流的账号临时降频，且状态不被标红', async () => {
+  const h = harness();
+  const account = seedAccount(h.deps.db, { syncIntervalSeconds: 300 });
+  const sched = scheduler(h, flakyRunner(h, { fail: THROTTLE_ERROR }));
+
+  await sched.tick();
+
+  assert.equal(sched.cooldownMultiplier(account.id), 2);
+  assert.equal(sched.dueAt(account.id), h.clock.now + 600_000, '周期被拉长一倍');
+
+  h.clock.now += 600_000;
+  await sched.tick();
+  assert.equal(sched.cooldownMultiplier(account.id), 4, '继续被限流就继续降频');
+  assert.equal(sched.dueAt(account.id), h.clock.now + 1_200_000);
+
+  const row = h.deps.db.select().from(accounts).where(eq(accounts.id, account.id)).get();
+  assert.equal(row?.status, 'active', '限流不是账号的问题，不能标红');
+  h.close();
+});
+
+test('一次成功就解除降频，周期回到正常值', async () => {
+  const h = harness();
+  const account = seedAccount(h.deps.db, { syncIntervalSeconds: 300 });
+  const gate: { fail: Error | null } = { fail: THROTTLE_ERROR };
+  const sched = scheduler(h, flakyRunner(h, gate));
+
+  await sched.tick();
+  h.clock.now += 600_000;
+  await sched.tick();
+  assert.equal(sched.cooldownMultiplier(account.id), 4);
+
+  gate.fail = null;
+  h.clock.now += 1_200_000;
+  await sched.tick();
+
+  assert.equal(sched.cooldownMultiplier(account.id), 1, '上游恢复后惩罚立刻清零');
+  assert.equal(sched.dueAt(account.id), h.clock.now + 300_000);
+  h.close();
+});
+
+test('triggerNow 成功同样解除降频', async () => {
+  const h = harness();
+  const account = seedAccount(h.deps.db, { syncIntervalSeconds: 300 });
+  const gate: { fail: Error | null } = { fail: THROTTLE_ERROR };
+  const sched = scheduler(h, flakyRunner(h, gate));
+
+  await sched.triggerNow(account.id);
+  assert.equal(sched.cooldownMultiplier(account.id), 2);
+
+  gate.fail = null;
+  const result = await sched.triggerNow(account.id);
+
+  assert.equal(result?.status, 'ok');
+  assert.equal(sched.cooldownMultiplier(account.id), 1);
+  assert.equal(sched.dueAt(account.id), h.clock.now + 300_000);
+  h.close();
+});
+
+test('认证失败不触发降频：那是账号自己的问题，不是限流', async () => {
+  const h = harness();
+  const account = seedAccount(h.deps.db);
+  const authError = Object.assign(new Error('Invalid credentials'), {
+    authenticationFailed: true,
+    serverResponseCode: 'AUTHENTICATIONFAILED',
+  });
+  const sched = scheduler(h, flakyRunner(h, { fail: authError }));
+
+  await sched.tick();
+
+  assert.equal(sched.cooldownMultiplier(account.id), 1);
+  const row = h.deps.db.select().from(accounts).where(eq(accounts.id, account.id)).get();
+  assert.equal(row?.status, 'auth_error');
+  h.close();
+});
+
+test('降频不越过最大周期上限', async () => {
+  const h = harness();
+  const account = seedAccount(h.deps.db, { syncIntervalSeconds: 86_400 });
+  const sched = scheduler(h, flakyRunner(h, { fail: THROTTLE_ERROR }));
+
+  await sched.tick();
+
+  assert.equal(sched.dueAt(account.id), h.clock.now + 86_400_000, '已经是上限就不再往上加');
+  h.close();
+});
+
 test('start/stop 是幂等的，定时器不会拖住进程', async () => {
   const h = harness();
   const sched = scheduler(h, new SyncRunner(h.deps, { concurrency: 1 }));

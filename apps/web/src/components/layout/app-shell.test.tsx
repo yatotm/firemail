@@ -171,6 +171,52 @@ describe('应用外壳', () => {
     });
   });
 
+  it('侧栏折叠后仍有可见、可聚焦、有正确无障碍名的展开入口', async () => {
+    const user = userEvent.setup();
+    localStorage.setItem('fm.sidebarCollapsed', 'false'); // 与断点无关地从展开态开始
+    await renderApp();
+
+    await user.click(await screen.findByRole('button', { name: '折叠侧栏' }));
+
+    // 折叠态下这个按钮是唯一的出口
+    const expand = await screen.findByRole('button', { name: '展开侧栏' });
+    expect(expand).toBeVisible();
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    // jsdom 不加载 Tailwind，`hidden` 这类类名不会真的影响布局，
+    // 所以这里直接断言类名——回归正是「折叠时给它加了 hidden」。
+    expect(expand.className).not.toMatch(/(?:^|\s)hidden(?:\s|$)/);
+
+    // 键盘可达：能拿到焦点，回车能激活（列表的 Enter 键位不许把按钮的激活吃掉）
+    expand.focus();
+    expect(expand).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+    const collapseAgain = await screen.findByRole('button', { name: '折叠侧栏' });
+    expect(collapseAgain).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('折叠偏好写进 localStorage，`[` 键与按钮走同一条路径', async () => {
+    const user = userEvent.setup();
+    localStorage.setItem('fm.sidebarCollapsed', 'false');
+    await renderApp();
+
+    await user.click(await screen.findByRole('button', { name: '折叠侧栏' }));
+    expect(localStorage.getItem('fm.sidebarCollapsed')).toBe('true');
+
+    await user.keyboard('[['); // user-event 里 `[` 要转义成 `[[`
+    await screen.findByRole('button', { name: '折叠侧栏' });
+    expect(localStorage.getItem('fm.sidebarCollapsed')).toBe('false');
+  });
+
+  it('`?` 速查表里能查到折叠侧栏的键位', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+
+    await user.keyboard('?');
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('折叠/展开侧栏');
+  });
+
   it('输入框聚焦时单字母键位失效（在命令面板里打 g 不会触发跳转）', async () => {
     const user = userEvent.setup();
     await renderApp();

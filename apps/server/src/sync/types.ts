@@ -1,6 +1,7 @@
 import type { ImapFlow } from 'imapflow';
 import type { Db, Sqlite } from '../db/client.ts';
 import type * as schema from '../db/schema.ts';
+import type { MailFailureKind } from '../providers/failures.ts';
 
 export type AccountRow = typeof schema.accounts.$inferSelect;
 export type FolderRow = typeof schema.folders.$inferSelect;
@@ -95,6 +96,11 @@ export interface AccountSyncResult {
   error: string | null;
   startedAt: number;
   finishedAt: number;
+  /**
+   * 失败原因的分类，成功时为 null。
+   * 调度器靠 `'throttled'` 决定要不要给这个账号临时降频。
+   */
+  failureKind: MailFailureKind | null;
 }
 
 /** 同步被自身超时或调用方取消。 */

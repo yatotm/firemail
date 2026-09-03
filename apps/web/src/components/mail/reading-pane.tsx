@@ -199,7 +199,7 @@ function LoadedMessage({
         </DropdownMenu>
       </div>
 
-      <div ref={containerRef} tabIndex={-1} className="min-h-0 flex-1 overflow-auto outline-none">
+      <div ref={containerRef} tabIndex={-1} className="focus-ring-inset min-h-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-[1040px] px-6 py-5">
           {account?.status === 'auth_error' ? (
             <div

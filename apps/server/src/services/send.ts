@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type {
+  AccountSmtpStatus,
   SendErrorKind,
   SendMessageRequest,
   SendMode,
@@ -18,7 +19,13 @@ import {
   type ParentMessage,
 } from '../mime/compose.ts';
 import { resolveThreadId } from '../mime/threading.ts';
-import { isAuthFailure, type AccountRow, type ProviderRegistry } from '../providers/index.ts';
+import {
+  SMTP_SUBMISSION_DISABLED_MESSAGE,
+  isAuthFailure,
+  isSmtpSubmissionDisabled,
+  type AccountRow,
+  type ProviderRegistry,
+} from '../providers/index.ts';
 import type { AccountService } from './accounts.ts';
 import type { AttachmentFetcher } from '../storage/attachmentFetcher.ts';
 import type { AttachmentStore } from '../storage/attachmentStore.ts';
@@ -471,18 +478,11 @@ export class SendService {
       job.result.rejectedRecipients = rejected;
     } catch (error) {
       const classified = classifySmtpError(error);
-      if (classified.kind === 'auth') {
-        // 与 OAuth 层同一条路径：把账号标红，UI 才会提示「需要重新授权」
-        this.#accounts.setStatus(account.id, 'auth_error', classified.message);
-        this.#hub?.publish(job.userId, {
-          type: 'account:status',
-          accountId: account.id,
-          status: 'auth_error',
-        });
-      }
+      this.#recordSmtpHealth(job, account, classified);
       return this.#fail(job, classified);
     }
 
+    this.#accounts.setSmtpHealth(account.id, 'ok', null);
     job.result.status = 'sent';
     job.result.completedAt = this.#now();
 
@@ -496,6 +496,26 @@ export class SendService {
       });
     }
     return job.result;
+  }
+
+  /**
+   * 发信失败只影响「发信能力」，不再连坐整个账号。
+   *
+   * 只有真的凭据/token 被拒才把账号标红——这是唯一一种重新授权有用的情况。
+   * `535 5.7.139 SmtpClientAuthentication is disabled` 是邮箱侧关掉了 SMTP 提交，
+   * 收信照常工作，把它标成 auth_error 会连带禁掉发信入口并催用户去做无用的设备码授权。
+   */
+  #recordSmtpHealth(job: Job, account: AccountRow, classified: SmtpClassification): void {
+    if (classified.smtpStatus === null) return;
+    this.#accounts.setSmtpHealth(account.id, classified.smtpStatus, classified.message);
+    if (classified.smtpStatus !== 'auth_error') return;
+
+    this.#accounts.setStatus(account.id, 'auth_error', classified.message);
+    this.#hub?.publish(job.userId, {
+      type: 'account:status',
+      accountId: account.id,
+      status: 'auth_error',
+    });
   }
 
   async #compose(plan: SendPlan): Promise<ComposedMessage> {
@@ -727,7 +747,13 @@ export class SendService {
   ): SendResult {
     job.result.status = 'failed';
     job.result.completedAt = this.#now();
-    job.result.error = { ...error, message: redact(error.message) };
+    // 逐字段拷贝而不是展开：分类结果比 SendError 多带了内部字段（smtpStatus），
+    // 不能顺着展开泄进 API 响应里
+    job.result.error = {
+      kind: error.kind,
+      message: redact(error.message),
+      retryable: error.retryable,
+    };
     this.#log?.error('发信失败', { jobId: job.result.id, kind: error.kind });
     return job.result;
   }
@@ -772,11 +798,20 @@ const RECIPIENT_CODES = new Set([501, 510, 511, 513, 550, 551, 553, 554]);
 const AUTH_CODES = new Set([530, 534, 535, 538]);
 const TRANSIENT_CODES = new Set(['ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'EDNS', 'ECONNRESET']);
 
-export function classifySmtpError(error: unknown): {
+export interface SmtpClassification {
   kind: SendErrorKind;
   message: string;
   retryable: boolean;
-} {
+  /**
+   * 这次失败对「发信能力」的判定；null 表示说明不了好坏，别覆盖已有结论。
+   * 与 `kind` 分开是因为二者的受众不同：`kind` 给这一封信，
+   * 这个字段给账号——`535 5.7.139` 两边都是「认证被拒」，但一个能重发、
+   * 另一个是这个邮箱根本不允许 SMTP 提交，重新授权毫无意义。
+   */
+  smtpStatus: AccountSmtpStatus | null;
+}
+
+export function classifySmtpError(error: unknown): SmtpClassification {
   const message = redact(describe(error));
   const candidate = error as { code?: unknown; responseCode?: unknown };
   const code = typeof candidate?.code === 'string' ? candidate.code.toUpperCase() : '';
@@ -785,21 +820,37 @@ export function classifySmtpError(error: unknown): {
   // 顺序有讲究：先看明确的信号（异常类型、SMTP 响应码），
   // 最后才用 isAuthFailure 的模糊文本匹配兜底，否则一句
   // "550 no such login name" 会被误判成需要重新授权。
-  if (error instanceof RecipientRejectedError) return { kind: 'recipient', message, retryable: false };
+  if (error instanceof RecipientRejectedError) {
+    return { kind: 'recipient', message, retryable: false, smtpStatus: 'ok' };
+  }
+  // 必须排在 AUTH_CODES 之前：这也是一个 535，但它不是凭据问题。
+  if (isSmtpSubmissionDisabled(error)) {
+    return {
+      kind: 'auth',
+      message: SMTP_SUBMISSION_DISABLED_MESSAGE,
+      retryable: false,
+      smtpStatus: 'disabled',
+    };
+  }
   if (code === 'EAUTH' || AUTH_CODES.has(responseCode)) {
-    return { kind: 'auth', message, retryable: false };
+    return { kind: 'auth', message, retryable: false, smtpStatus: 'auth_error' };
   }
   if (code === 'EENVELOPE' || RECIPIENT_CODES.has(responseCode)) {
-    return { kind: 'recipient', message, retryable: false };
+    // 收件人被拒说明会话本身建起来了，发信通道是好的
+    return { kind: 'recipient', message, retryable: false, smtpStatus: 'ok' };
   }
   // 4xx 是「暂时不行，稍后再来」，重试是对的；5xx 重试只会被同样拒绝
-  if (responseCode >= 400 && responseCode < 500) return { kind: 'transient', message, retryable: true };
-  if (responseCode >= 500) return { kind: 'recipient', message, retryable: false };
-  if (TRANSIENT_CODES.has(code) || /timeout|超时/i.test(message)) {
-    return { kind: 'transient', message, retryable: true };
+  if (responseCode >= 400 && responseCode < 500) {
+    return { kind: 'transient', message, retryable: true, smtpStatus: null };
   }
-  if (isAuthFailure(error)) return { kind: 'auth', message, retryable: false };
-  return { kind: 'internal', message, retryable: true };
+  if (responseCode >= 500) return { kind: 'recipient', message, retryable: false, smtpStatus: 'ok' };
+  if (TRANSIENT_CODES.has(code) || /timeout|超时/i.test(message)) {
+    return { kind: 'transient', message, retryable: true, smtpStatus: null };
+  }
+  if (isAuthFailure(error)) {
+    return { kind: 'auth', message, retryable: false, smtpStatus: 'auth_error' };
+  }
+  return { kind: 'internal', message, retryable: true, smtpStatus: null };
 }
 
 /**

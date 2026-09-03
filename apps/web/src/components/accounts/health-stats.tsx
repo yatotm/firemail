@@ -43,7 +43,7 @@ export function HealthStats({
             onClick={() => onSelect(selected ? 'all' : status)}
             className={cn(
               'flex h-18 flex-col justify-between rounded-lg border bg-card px-3 py-2 text-left transition-colors',
-              'hover:bg-accent/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+              'focus-ring hover:bg-accent/60',
               selected && 'border-primary bg-accent',
             )}
           >

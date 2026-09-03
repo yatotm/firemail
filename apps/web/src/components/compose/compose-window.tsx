@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { useComposeDraft } from '@/hooks/mail/use-compose';
 import { useMessageDetail } from '@/hooks/mail/use-message-detail';
 import { useSendMessage, sendFailureHint, SendUnavailableError } from '@/hooks/mail/use-send-message';
@@ -354,26 +355,28 @@ function ComposeForm({
         </div>
       ) : null}
 
-      <div className="flex items-center gap-2 border-b px-3 py-1.5">
+      <div className="focus-ring-within-inset flex items-center gap-2 border-b px-3 py-1.5">
         <label htmlFor="compose-subject" className="w-12 shrink-0 text-2xs text-muted-foreground">
           主题
         </label>
         <Input
+          variant="bare"
           id="compose-subject"
           value={draft.subject}
           onChange={(event) => state.patch({ subject: event.target.value })}
-          className="h-7 border-0 px-1 shadow-none focus-visible:ring-0"
+          className="h-7 px-1 text-sm"
         />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
-        <textarea
+      <div className="focus-ring-within-inset min-h-0 flex-1 overflow-auto px-3 py-2">
+        <Textarea
+          variant="bare"
           ref={bodyRef}
           value={draft.body}
           onChange={(event) => state.patch({ body: event.target.value })}
           aria-label="邮件正文"
           placeholder="写点什么…"
-          className="min-h-40 w-full resize-none bg-transparent text-sm leading-relaxed outline-none scroll-mb-24 placeholder:text-muted-foreground"
+          className="min-h-40 leading-relaxed scroll-mb-24"
           style={{ height: 'auto' }}
         />
 
@@ -412,6 +415,8 @@ function ComposeForm({
           {send.isPending ? '发送中…' : '发送'}
         </Button>
 
+        {/* 隐藏的文件选择器：不可见、不可聚焦，由「添加附件」按钮触发，没有可套用的基元 */}
+        {/* eslint-disable-next-line firemail/no-raw-form-elements */}
         <input
           ref={fileRef}
           type="file"
@@ -422,6 +427,8 @@ function ComposeForm({
             event.target.value = '';
           }}
         />
+        {/* 同上：隐藏的图片选择器，由工具条按钮触发 */}
+        {/* eslint-disable-next-line firemail/no-raw-form-elements */}
         <input
           ref={imageRef}
           type="file"

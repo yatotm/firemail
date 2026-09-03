@@ -4,6 +4,7 @@ import { FormSkeleton } from '@/components/common/skeletons';
 import { SelectField, SettingBlock } from '@/components/settings/controls';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { useAccountEditor } from '@/hooks/accounts/use-account-editor';
 import { useSettingsPatch, useUserSettings } from '@/hooks/accounts/use-user-settings';
 import { useAccounts } from '@/hooks/use-accounts';
@@ -79,13 +80,12 @@ export function ComposePanel() {
               <Label htmlFor="signature-body" className="text-xs">
                 签名内容
               </Label>
-              <textarea
+              <Textarea
                 id="signature-body"
                 rows={5}
                 maxLength={SIGNATURE_MAX_LENGTH}
                 value={signature}
                 onChange={(event) => setDraft(event.target.value)}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
             </div>
 

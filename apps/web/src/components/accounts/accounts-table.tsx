@@ -107,7 +107,7 @@ export function AccountsTable({
                 <button
                   type="button"
                   onClick={() => onSort(key)}
-                  className="inline-flex items-center gap-1 rounded-xs outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="focus-ring inline-flex items-center gap-1 rounded-xs hover:text-foreground"
                 >
                   {label}
                   {sort.key === key ? (

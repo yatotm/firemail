@@ -161,6 +161,41 @@ const NON_TYPING_INPUT_TYPES = new Set([
   'submit',
 ]);
 
+/** 原生就靠 Enter / Space 激活的控件。 */
+const ACTIVATION_ROLES = new Set([
+  'button',
+  'link',
+  'checkbox',
+  'radio',
+  'switch',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+]);
+
+/** Enter / Space 落在这些元素上时是「激活控件」，键位不能把它吞掉。 */
+const ACTIVATION_KEYS = new Set(['enter', ' ']);
+
+/**
+ * 焦点是否落在一个「按下去就该被激活」的控件上。
+ *
+ * 没有这条判断，注册在列表作用域上的 `Enter`（打开当前邮件）会连同
+ * `event.preventDefault()` 一起吃掉焦点在按钮上时的回车 —— Tab 得到、却按不动，
+ * 正是 accessibility.md §7「只用键盘完成全部主要操作」要挡住的那种 bug。
+ */
+export function isActivationTarget(target: EventTarget | null): boolean {
+  const el = target as (HTMLElement & { type?: string }) | null;
+  if (!el || typeof el.tagName !== 'string') return false;
+
+  const tag = el.tagName.toUpperCase();
+  if (tag === 'BUTTON' || tag === 'SUMMARY') return true;
+  if (tag === 'A') return el.hasAttribute('href');
+  if (tag === 'INPUT') return NON_TYPING_INPUT_TYPES.has((el.type ?? 'text').toLowerCase());
+
+  const role = el.getAttribute('role');
+  return role !== null && ACTIVATION_ROLES.has(role);
+}
+
 /** 输入态判定：在收件人框里打 `e` 不该把邮件归档（第一大 bug 源）。 */
 export function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as (HTMLElement & { type?: string }) | null;
@@ -299,7 +334,8 @@ export class ShortcutRegistry {
       }
     }
 
-    const handled = this.dispatch(event, (b) => this.matchesSingle(b, event, typing));
+    const activating = ACTIVATION_KEYS.has(key) && isActivationTarget(event.target);
+    const handled = this.dispatch(event, (b) => this.matchesSingle(b, event, typing, activating));
     if (handled) return { handled: true, pending: this.pending };
 
     if (!typing && this.armPrefix(event)) {
@@ -331,13 +367,20 @@ export class ShortcutRegistry {
       });
   }
 
-  private matchesSingle(binding: Registered, event: KeyboardEvent, typing: boolean): boolean {
+  private matchesSingle(
+    binding: Registered,
+    event: KeyboardEvent,
+    typing: boolean,
+    activating: boolean,
+  ): boolean {
     if (binding.chords.length !== 1) return false;
     const chord = binding.chords[0];
     if (!chord) return false;
     if (typing && !binding.allowInInput && !hasModifier(chord) && chord.key !== 'escape') {
       return false;
     }
+    // 焦点在按钮/链接上时，无修饰键的 Enter / Space 归控件自己
+    if (activating && !hasModifier(chord)) return false;
     return chordMatches(chord, event, this.isMac);
   }
 

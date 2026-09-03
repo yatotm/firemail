@@ -10,6 +10,27 @@ export type AccountAuthType = z.infer<typeof accountAuthTypeSchema>;
 export const accountStatusSchema = z.enum(['active', 'auth_error', 'error', 'disabled']);
 export type AccountStatus = z.infer<typeof accountStatusSchema>;
 
+/**
+ * 发信能力，与 `status`（收信健康度）分开。
+ *
+ * 起因：Outlook 会对单个邮箱关闭 SMTP 提交（`535 5.7.139 SmtpClientAuthentication is
+ * disabled`），此时收信完全正常。把这种账号整体标红既不准确，也会诱导用户去做
+ * 一次解决不了问题的重新授权，所以「发信不可用」必须能独立表达。
+ *
+ *  - unknown    —— 还没验证过；
+ *  - ok         —— 最近一次发信/测试连接成功；
+ *  - disabled   —— 服务端关闭了该邮箱的 SMTP 提交，重新授权无用；
+ *  - auth_error —— 凭据/token 被 SMTP 拒绝，重新授权可能有用；
+ *  - error      —— 其它发信故障（网络、配置）。
+ */
+export const accountSmtpStatusSchema = z.enum(['unknown', 'ok', 'disabled', 'auth_error', 'error']);
+export type AccountSmtpStatus = z.infer<typeof accountSmtpStatusSchema>;
+
+/** 该状态下重新授权是否可能有帮助。UI 靠它决定要不要显示「重新授权」按钮。 */
+export function smtpReauthMayHelp(status: AccountSmtpStatus): boolean {
+  return status === 'auth_error';
+}
+
 export const SYNC_INTERVAL_MIN_SECONDS = 60;
 export const SYNC_INTERVAL_MAX_SECONDS = 86_400;
 export const SYNC_INTERVAL_DEFAULT_SECONDS = 300;
@@ -43,9 +64,15 @@ export const accountSchema = z
     oauthTokenExpiresAt: nullableTimestampSchema,
     oauthScope: z.string().nullable(),
 
+    /** 收信（IMAP）健康度。发信故障不会写到这里。 */
     status: accountStatusSchema,
     lastError: z.string().nullable(),
     lastErrorAt: nullableTimestampSchema,
+
+    /** 发信（SMTP）健康度，与 status 相互独立，附加字段不影响既有消费方。 */
+    smtpStatus: accountSmtpStatusSchema.default('unknown'),
+    smtpError: z.string().nullable().default(null),
+    smtpCheckedAt: nullableTimestampSchema.default(null),
 
     syncEnabled: z.boolean(),
     syncIntervalSeconds: z.number().int(),
@@ -142,9 +169,18 @@ export const accountListQuerySchema = z.object({
 });
 export type AccountListQuery = z.infer<typeof accountListQuerySchema>;
 
+/**
+ * 「测试连接」的结果。两条通道分别报告：
+ * 收信正常而发信被服务端关闭是 Outlook 上的常态，不能合并成一个成败。
+ */
 export const testConnectionResultSchema = z.object({
   imap: z.object({ ok: z.boolean(), message: z.string().nullable() }),
-  smtp: z.object({ ok: z.boolean(), message: z.string().nullable() }),
+  smtp: z.object({
+    ok: z.boolean(),
+    message: z.string().nullable(),
+    /** 附加字段：让 UI 能区分「重新授权有用」和「重新授权没用」。 */
+    status: accountSmtpStatusSchema.default('unknown'),
+  }),
 });
 export type TestConnectionResult = z.infer<typeof testConnectionResultSchema>;
 

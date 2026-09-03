@@ -8,6 +8,8 @@ import {
   type ReauthView,
 } from '@/lib/accounts/device-code';
 import type { DeviceCodeState } from '@/lib/accounts/schemas';
+import { useOptionalActivity } from '@/hooks/use-activity';
+import { humanizeApiError } from '@/lib/api';
 import { showErrorToast, showSuccessToast } from '@/lib/undo';
 
 /**
@@ -37,6 +39,7 @@ export function reauthQueryKey(accountId: number): readonly unknown[] {
 
 export function useReauth(accountId: number, enabled = true): ReauthController {
   const client = useQueryClient();
+  const activity = useOptionalActivity();
   const [now, setNow] = useState(() => Date.now());
   const [cancelled, setCancelled] = useState(false);
   const notified = useRef(false);
@@ -63,9 +66,14 @@ export function useReauth(accountId: number, enabled = true): ReauthController {
     onMutate: () => {
       setCancelled(false);
       notified.current = false;
+      // 设备码流程要用户去浏览器里点确认，中间可能几分钟；活动中心得先把它挂上
+      activity.begin('reauth', accountId);
     },
     onSuccess: (next) => client.setQueryData(reauthQueryKey(accountId), next),
-    onError: (error) => showErrorToast('无法发起重新授权', error),
+    onError: (error) => {
+      activity.settle('reauth', accountId, 'error', humanizeApiError(error));
+      showErrorToast('无法发起重新授权', error);
+    },
   });
 
   const cancel = useMutation({
@@ -73,6 +81,7 @@ export function useReauth(accountId: number, enabled = true): ReauthController {
     onSuccess: () => {
       // 服务端取消后会把流程记录丢掉，GET 会变成 404 —— 取消这件事只能本地记住
       setCancelled(true);
+      activity.settle('reauth', accountId, 'error', '已取消');
       client.setQueryData(reauthQueryKey(accountId), null);
     },
     onError: (error) => showErrorToast('取消授权失败', error),
@@ -97,13 +106,21 @@ export function useReauth(accountId: number, enabled = true): ReauthController {
     return () => window.clearTimeout(timer);
   }, [state, query]);
 
-  // 成功只播报一次，并让账号列表立刻反映新的状态
+  // 成功只播报一次，并让账号列表立刻反映新的状态；失败/过期也要给活动中心一个终态
   useEffect(() => {
-    if (view.phase !== 'success' || notified.current) return;
+    const phase = view.phase;
+    if (notified.current || (phase !== 'success' && phase !== 'failed' && phase !== 'expired')) {
+      return;
+    }
     notified.current = true;
-    showSuccessToast('重新授权成功', '账号已恢复同步');
-    invalidateAccountData(client);
-  }, [view.phase, client]);
+    if (phase === 'success') {
+      activity.settle('reauth', accountId, 'success', '账号已恢复同步');
+      showSuccessToast('重新授权成功', '账号已恢复同步');
+      invalidateAccountData(client);
+      return;
+    }
+    activity.settle('reauth', accountId, 'error', phase === 'expired' ? '设备码已过期' : '授权失败');
+  }, [view.phase, client, activity, accountId]);
 
   const startFlow = useCallback(() => start.mutate(), [start]);
   const cancelFlow = useCallback(() => cancel.mutate(), [cancel]);

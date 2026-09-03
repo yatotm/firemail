@@ -4,6 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+import { firemailPlugin } from './tools/eslint/no-raw-form-elements.js';
 
 /**
  * 从第一天就把 lint 立起来。上游项目开着 `eslint.ignoreDuringBuilds`，
@@ -61,6 +62,17 @@ export default tseslint.config(
     },
   },
 
+  /**
+   * 表单基元的护栏：原生 input / select / textarea 只允许出现在 components/ui 里。
+   * 见 tools/eslint/no-raw-form-elements.js。
+   */
+  {
+    files: ['src/**/*.tsx'],
+    ignores: ['src/components/ui/**'],
+    plugins: { firemail: firemailPlugin },
+    rules: { 'firemail/no-raw-form-elements': 'error' },
+  },
+
   {
     files: ['**/*.test.{ts,tsx}', 'src/lib/test/**'],
     rules: {
@@ -71,7 +83,7 @@ export default tseslint.config(
   },
 
   {
-    files: ['*.config.{js,ts}', 'eslint.config.js'],
+    files: ['*.config.{js,ts}', 'eslint.config.js', 'tools/**/*.js'],
     languageOptions: { globals: globals.node },
     ...tseslint.configs.disableTypeChecked,
   },

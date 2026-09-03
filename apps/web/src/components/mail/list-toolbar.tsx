@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { KeyboardEvent, RefObject } from 'react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -122,15 +123,16 @@ export function ListToolbar({
       </div>
 
       <div className="px-3 pb-2">
-        <div className="flex h-9 items-center gap-2 rounded-sm border border-input px-2 focus-within:border-ring">
+        <div className="focus-ring-within flex h-9 items-center gap-2 rounded-sm border border-input px-2">
           <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <input
+          <Input
+            variant="bare"
             ref={searchRef}
             type="search"
             placeholder={`在${viewLabel(view)}中搜索`}
             aria-label="搜索邮件"
             onKeyDown={submit}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="flex-1 text-sm"
           />
           <Kbd keys="/" className="hidden shrink-0 sm:inline-flex" />
         </div>

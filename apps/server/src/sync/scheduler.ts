@@ -1,6 +1,7 @@
 import { and, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { accounts } from '../db/schema.ts';
+import { SyncCooldown } from './cooldown.ts';
 import type { SyncRunner } from './runner.ts';
 import type { AccountRow, AccountSyncResult, SyncLogger } from './types.ts';
 
@@ -16,6 +17,8 @@ export interface SyncSchedulerOptions {
   now?: () => number;
   random?: () => number;
   log?: SyncLogger;
+  /** 被限流账号的最大降频倍数。 */
+  maxCooldownMultiplier?: number;
 }
 
 export interface TickResult {
@@ -45,10 +48,11 @@ const DEFAULTS = {
 export class SyncScheduler {
   readonly #db: Db;
   readonly #runner: SyncRunner;
-  readonly #options: Required<Omit<SyncSchedulerOptions, 'log'>>;
+  readonly #options: Required<Omit<SyncSchedulerOptions, 'log' | 'maxCooldownMultiplier'>>;
   readonly #log: SyncLogger | undefined;
   /** accountId -> 下次到期的时间戳。进程内状态，重启后按 last_synced_at 重算。 */
   readonly #dueAt = new Map<number, number>();
+  readonly #cooldown: SyncCooldown;
   #timer: ReturnType<typeof setInterval> | null = null;
   #ticking: Promise<TickResult> | null = null;
 
@@ -56,6 +60,11 @@ export class SyncScheduler {
     this.#db = deps.db;
     this.#runner = deps.runner;
     this.#log = options.log;
+    this.#cooldown = new SyncCooldown(
+      options.maxCooldownMultiplier === undefined
+        ? {}
+        : { maxMultiplier: options.maxCooldownMultiplier },
+    );
     this.#options = {
       tickMs: options.tickMs ?? DEFAULTS.tickMs,
       jitterRatio: options.jitterRatio ?? DEFAULTS.jitterRatio,
@@ -91,6 +100,11 @@ export class SyncScheduler {
     return this.#dueAt.get(accountId);
   }
 
+  /** 该账号当前的降频倍数，1 表示没有被限流。 */
+  cooldownMultiplier(accountId: number): number {
+    return this.#cooldown.multiplier(accountId);
+  }
+
   /**
    * 跑一轮到期检查。
    * 单独暴露成方法（而不是藏在定时器里）是为了让测试用注入的时钟精确驱动，
@@ -110,6 +124,7 @@ export class SyncScheduler {
     if (!account) return null;
 
     const result = await this.#runner.run(account);
+    this.#cooldown.record(accountId, result.failureKind);
     this.#reschedule(account);
     return result;
   }
@@ -142,7 +157,10 @@ export class SyncScheduler {
       if (outcome === null) {
         result.started.splice(result.started.indexOf(account.id), 1);
         result.skipped.push(account.id);
+        return;
       }
+      // 被限流的账号在这里降频；成功一次就立刻恢复
+      this.#cooldown.record(account.id, outcome.failureKind);
     } catch (error) {
       this.#log?.error('账号同步抛出异常', { accountId: account.id, error: String(error) });
     } finally {
@@ -179,6 +197,9 @@ export class SyncScheduler {
       Math.max(MIN_INTERVAL_SECONDS, account.syncIntervalSeconds || MIN_INTERVAL_SECONDS),
     );
     const jitter = this.#options.jitterRatio * (this.#options.random() * 2 - 1);
-    return Math.round(seconds * 1000 * (1 + jitter));
+    // 冷却是乘在抖动之后的：被限流的账号一样要错开相位，否则降频只是把撞车推迟。
+    // 再降频也不越过配置允许的最大周期，免得一个账号被冷却到几天不收信。
+    const cooled = seconds * 1000 * (1 + jitter) * this.#cooldown.multiplier(account.id);
+    return Math.round(Math.min(cooled, MAX_INTERVAL_SECONDS * 1000));
   }
 }

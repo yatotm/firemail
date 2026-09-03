@@ -280,3 +280,45 @@ describe('速查表', () => {
     expect(formatKeys('Shift+E', false)).toEqual(['Shift+E']);
   });
 });
+
+describe('焦点在可激活控件上时不劫持 Enter / Space', () => {
+  function pressOn(element: HTMLElement, key: string) {
+    const registry = new ShortcutRegistry();
+    const runs: string[] = [];
+    registry.register({
+      keys: key === ' ' ? 'Space' : 'Enter',
+      label: '打开当前邮件',
+      group: '导航',
+      run: () => void runs.push('shortcut'),
+    });
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'target', { value: element });
+    registry.handleKeyDown(event);
+    return { runs, prevented: event.defaultPrevented };
+  }
+
+  it('按钮上的 Enter 归按钮，不被列表的「打开当前邮件」吃掉', () => {
+    const button = document.createElement('button');
+    const { runs, prevented } = pressOn(button, 'Enter');
+    expect(runs).toEqual([]);
+    expect(prevented).toBe(false);
+  });
+
+  it('带 href 的链接、role=button 的元素同理', () => {
+    const link = document.createElement('a');
+    link.href = '#x';
+    expect(pressOn(link, 'Enter').runs).toEqual([]);
+
+    const div = document.createElement('div');
+    div.setAttribute('role', 'button');
+    expect(pressOn(div, ' ').runs).toEqual([]);
+  });
+
+  it('列表容器（role=listbox）上的 Enter 仍然走键位', () => {
+    const list = document.createElement('div');
+    list.setAttribute('role', 'listbox');
+    const { runs, prevented } = pressOn(list, 'Enter');
+    expect(runs).toEqual(['shortcut']);
+    expect(prevented).toBe(true);
+  });
+})

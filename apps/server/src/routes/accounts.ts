@@ -101,7 +101,10 @@ export function registerAccountRoutes(app: FastifyInstance, ctx: AppContext): vo
     if (!row) throw notFound(`账号 ${account.id} 不存在`);
 
     const provider = ctx.providers.get(row.provider);
-    return ok(await withDeadline(provider.verify(row), VERIFY_TIMEOUT_MS, '测试连接超时'));
+    const result = await withDeadline(provider.verify(row), VERIFY_TIMEOUT_MS, '测试连接超时');
+    // 收信与发信分开记账：SMTP 被服务端关掉的账号收信仍然正常，不能整体标红
+    ctx.accounts.setSmtpHealth(row.id, result.smtp.status, result.smtp.message);
+    return ok(result);
   });
 
   registerReauthRoutes(app, ctx);

@@ -2,8 +2,10 @@ import { accountProviderSchema, type Account, type AccountProvider } from '@fire
 import { useState } from 'react';
 import { useAccountEditor } from '@/hooks/accounts/use-account-editor';
 import { ConnectionTestResult } from '@/components/accounts/connection-test-result';
-import { SecretState, SelectField, Switch, TextField } from '@/components/settings/controls';
+import { SecretState, SelectField, TextField } from '@/components/settings/controls';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -236,7 +238,7 @@ export function AccountFormDialog({
               type="button"
               onClick={() => setAdvanced((current) => !current)}
               aria-expanded={advanced}
-              className="flex w-full items-center justify-between px-3 py-2 text-sm outline-none hover:bg-accent/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+              className="focus-ring-inset flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-accent/50"
             >
               连接参数
               <span className="text-xs text-muted-foreground">
@@ -265,12 +267,11 @@ export function AccountFormDialog({
                     onChange={(imapPort) => patch({ imapPort })}
                   />
                 </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                <label htmlFor="account-imap-secure" className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    id="account-imap-secure"
                     checked={form.imapSecure}
-                    onChange={(event) => patch({ imapSecure: event.target.checked })}
-                    className="size-4 accent-primary"
+                    onCheckedChange={(imapSecure) => patch({ imapSecure })}
                   />
                   IMAP 使用 TLS
                 </label>
@@ -294,12 +295,11 @@ export function AccountFormDialog({
                     onChange={(smtpPort) => patch({ smtpPort })}
                   />
                 </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                <label htmlFor="account-smtp-secure" className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    id="account-smtp-secure"
                     checked={form.smtpSecure}
-                    onChange={(event) => patch({ smtpSecure: event.target.checked })}
-                    className="size-4 accent-primary"
+                    onCheckedChange={(smtpSecure) => patch({ smtpSecure })}
                   />
                   SMTP 直连 TLS（否则用 STARTTLS）
                 </label>

@@ -4,6 +4,7 @@ import {
   updateAccountRequestSchema,
   type Account,
   type AccountListQuery,
+  type AccountSmtpStatus,
   type AccountStatus,
   type BulkImportResult,
 } from '@firemail/shared';
@@ -14,6 +15,7 @@ import type { Db } from '../db/client.ts';
 import { accounts, folders } from '../db/schema.ts';
 import { applyProviderDefaults, supportsAuthType } from '../providers/defaults.ts';
 import type { AccountRow } from '../providers/types.ts';
+import { SmtpHealthStore, UNKNOWN_SMTP_HEALTH, type SmtpHealth } from './smtpHealth.ts';
 
 export type AccountErrorCode = 'bad_request' | 'not_found' | 'conflict';
 
@@ -65,11 +67,13 @@ export class AccountService {
   readonly #db: Db;
   readonly #box: SecretBox;
   readonly #now: () => number;
+  readonly #smtp: SmtpHealthStore;
 
   constructor(options: AccountServiceOptions) {
     this.#db = options.db;
     this.#box = options.box;
     this.#now = options.now ?? Date.now;
+    this.#smtp = new SmtpHealthStore({ db: options.db, now: this.#now });
   }
 
   list(userId: number, query: AccountListQuery = {}): Account[] {
@@ -90,14 +94,29 @@ export class AccountService {
       .where(and(...filters))
       .orderBy(accounts.id)
       .all();
-    const unread = this.#unreadCounts(rows.map((r) => r.id));
-    return rows.map((row) => toView(row, unread.get(row.id) ?? 0));
+    const ids = rows.map((r) => r.id);
+    const unread = this.#unreadCounts(ids);
+    const smtp = this.#smtp.getMany(ids);
+    return rows.map((row) => toView(row, unread.get(row.id) ?? 0, smtp.get(row.id)));
   }
 
   get(userId: number, accountId: number): Account | null {
     const row = this.#find(userId, accountId);
     if (!row) return null;
-    return toView(row, this.#unreadCounts([row.id]).get(row.id) ?? 0);
+    return toView(row, this.#unreadCounts([row.id]).get(row.id) ?? 0, this.#smtp.get(row.id));
+  }
+
+  /** 发信能力，与收信健康度（status）互不影响。 */
+  smtpHealth(accountId: number): SmtpHealth {
+    return this.#smtp.get(accountId);
+  }
+
+  /**
+   * 记录一次发信通道的结论。
+   * 刻意**不**碰 `accounts.status`：发信被服务端关掉的账号收信仍然完全正常。
+   */
+  setSmtpHealth(accountId: number, status: AccountSmtpStatus, message: string | null = null): void {
+    this.#smtp.set(accountId, status, message);
   }
 
   /** 内部用：带密文的原始行。只给 providers / 同步层，绝不出现在 HTTP 响应里。 */
@@ -149,6 +168,8 @@ export class AccountService {
       .get();
     return toView(row, 0);
   }
+
+
 
   update(userId: number, accountId: number, input: UpdateAccountInput): Account {
     const current = this.#requireRow(userId, accountId);
@@ -210,11 +231,20 @@ export class AccountService {
       .where(eq(accounts.id, accountId))
       .returning()
       .get();
-    return toView(row, this.#unreadCounts([accountId]).get(accountId) ?? 0);
+    // 换了凭据/服务器就重新验证发信，旧结论不再作数
+    if (data.oauthRefreshToken !== undefined || data.password !== undefined) {
+      this.#smtp.clear(accountId);
+    }
+    return toView(
+      row,
+      this.#unreadCounts([accountId]).get(accountId) ?? 0,
+      this.#smtp.get(accountId),
+    );
   }
 
   remove(userId: number, accountId: number): boolean {
     this.#requireRow(userId, accountId);
+    this.#smtp.clear(accountId);
     return this.#db.delete(accounts).where(eq(accounts.id, accountId)).run().changes > 0;
   }
 
@@ -426,7 +456,7 @@ export function parseBulkImportPayload(payload: string, separator = '----'): Bul
 }
 
 /** 密文列不出现在返回值里，只留"有没有配"的布尔。 */
-function toView(row: AccountRow, unreadCount: number): Account {
+function toView(row: AccountRow, unreadCount: number, smtp: SmtpHealth = UNKNOWN_SMTP_HEALTH): Account {
   return {
     id: row.id,
     userId: row.userId,
@@ -448,6 +478,9 @@ function toView(row: AccountRow, unreadCount: number): Account {
     status: row.status as AccountStatus,
     lastError: row.lastError,
     lastErrorAt: row.lastErrorAt?.getTime() ?? null,
+    smtpStatus: smtp.status,
+    smtpError: smtp.message,
+    smtpCheckedAt: smtp.checkedAt,
     syncEnabled: row.syncEnabled,
     syncIntervalSeconds: row.syncIntervalSeconds,
     lastSyncedAt: row.lastSyncedAt?.getTime() ?? null,

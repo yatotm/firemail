@@ -126,6 +126,17 @@
 
   /* 列表密度：由 <html data-density> 覆写，组件读 --fm-row-height */
   --fm-row-height: 4rem;
+
+  /* ── 焦点与控件外观：全应用唯一定义处 ──────────────────────────
+   * 宽度 2px 而不是 shadcn 默认的 3px：tokens.md §7 写死了「描边宽度永远 1px，
+   * 唯一的 2px 是列表行选中竖条和焦点环」，accessibility.md §1.3 也是 outline-2。
+   * 组件一律用 focus-ring / focus-ring-inset / focus-ring-within 三个 utility，
+   * 不许再出现 ring-[3px] 之类的字面量（由 src/styles/focus-tokens.test.ts 守着）。 */
+  --fm-focus-width: 2px;
+  --fm-focus-offset: 2px;
+  /* 控件边界用 --input（≥3:1，WCAG 1.4.11），不是装饰性的 --border */
+  --fm-control-border: var(--input);
+  --fm-control-radius: var(--radius-sm); /* 6px：Input / Select / Textarea（tokens.md §6） */
 }
 
 .dark {
@@ -374,6 +385,75 @@ html[data-density="comfortable"] {
   z-index: var(--z-tooltip);
 }
 
+/* ---------------------------------------------------------------------------
+ * 焦点环：唯一实现处。
+ * 用 outline 而不是 box-shadow（ring）—— outline 不参与布局、不被 overflow: hidden
+ * 裁掉、在 Windows 高对比度模式下会被系统色替换（accessibility.md §1.3）。
+ * ------------------------------------------------------------------------- */
+
+/** 默认焦点环：环画在元素外侧 2px 处。 */
+@utility focus-ring {
+  &:focus-visible {
+    outline: var(--fm-focus-width) solid var(--ring);
+    outline-offset: var(--fm-focus-offset);
+  }
+}
+
+/** 紧贴容器边缘的元素（列表行、Tab、滚动容器）用内描边，否则环会被裁掉。 */
+@utility focus-ring-inset {
+  &:focus-visible {
+    outline: var(--fm-focus-width) solid var(--ring);
+    outline-offset: calc(-1 * var(--fm-focus-offset));
+  }
+}
+
+/** 复合控件（外框 + 图标 + 裸输入框）：焦点表达由外框承担，内部输入框不再各画一个。 */
+@utility focus-ring-within {
+  &:focus-within {
+    outline: var(--fm-focus-width) solid var(--ring);
+    outline-offset: var(--fm-focus-offset);
+  }
+}
+
+/** 同上，但用于满宽的行（撰写窗的收件人 / 主题行），外描边会压到相邻行上。 */
+@utility focus-ring-within-inset {
+  &:focus-within {
+    outline: var(--fm-focus-width) solid var(--ring);
+    outline-offset: calc(-1 * var(--fm-focus-offset));
+  }
+}
+
+/**
+ * 表单控件外观：Input / Select / Textarea 共用同一份边界、圆角、禁用与非法态。
+ * 改这里就等于同时改掉全部输入类控件，不需要逐个组件去追。
+ */
+@utility field-shell {
+  border: 1px solid var(--fm-control-border);
+  border-radius: var(--fm-control-radius);
+  background-color: transparent;
+  box-shadow: var(--fm-shadow-xs);
+  transition-property: color, border-color, outline-color;
+  transition-duration: 100ms;
+  transition-timing-function: var(--ease-standard);
+
+  @variant dark {
+    background-color: color-mix(in oklab, var(--input) 30%, transparent);
+  }
+
+  &::placeholder {
+    color: var(--muted-foreground);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  &[aria-invalid='true'] {
+    border-color: var(--destructive);
+  }
+}
+
 /** 数字对齐：时间戳、大小、计数、验证码 */
 @utility tnum {
   font-variant-numeric: tabular-nums;
@@ -415,9 +495,10 @@ html[data-density="comfortable"] {
     background: var(--fm-row-selected);
   }
 
-  /* 键盘焦点才画环，鼠标点击不画 */
+  /* 键盘焦点才画环，鼠标点击不画。这是兜底：没显式写 focus-ring 的元素也有环。 */
   :focus-visible {
-    @apply outline-2 outline-offset-2 outline-ring;
+    outline: var(--fm-focus-width) solid var(--ring);
+    outline-offset: var(--fm-focus-offset);
   }
 
   /* Windows 高对比度：只有颜色本身承载信息的地方保留自定义色 */

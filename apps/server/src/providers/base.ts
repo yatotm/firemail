@@ -1,7 +1,8 @@
-import type { AccountAuthType } from '@firemail/shared';
+import type { AccountAuthType, AccountSmtpStatus } from '@firemail/shared';
 import { ImapFlow } from 'imapflow';
 import { createTransport, type Transporter } from 'nodemailer';
 import { PROVIDER_AUTH_TYPES, PROVIDER_DEFAULTS } from './defaults.ts';
+import { classifyMailFailure, SMTP_SUBMISSION_DISABLED_MESSAGE } from './failures.ts';
 import {
   ProviderError,
   type AccountRow,
@@ -124,14 +125,27 @@ export abstract class BaseMailProvider implements MailProvider {
     }
   }
 
-  async #verifySmtp(account: AccountRow): Promise<{ ok: boolean; message: string | null }> {
+  /**
+   * 发信通道单独给结论。
+   * 收信正常而发信被邮箱侧关闭是 Outlook 上的常态，`status` 让调用方能把
+   * 「重新授权也没用」和「换个 token 就好」区分开。
+   */
+  async #verifySmtp(
+    account: AccountRow,
+  ): Promise<{ ok: boolean; message: string | null; status: AccountSmtpStatus }> {
     let transporter: Transporter | null = null;
     try {
       transporter = await this.createTransport(account);
       await transporter.verify();
-      return { ok: true, message: null };
+      return { ok: true, message: null, status: 'ok' };
     } catch (cause) {
-      return { ok: false, message: messageOf(cause, this.describeFailure(cause, 'smtp')) };
+      // IMAP 那边的 cause 已经是 connectImap 翻译过的 ProviderError，SMTP 这边拿到的是
+      // nodemailer 原文，必须在这里翻译一次，否则用户只会看到一句英文的 535 应答。
+      return {
+        ok: false,
+        message: cause instanceof ProviderError ? cause.message : this.describeFailure(cause, 'smtp'),
+        status: smtpStatusOf(cause),
+      };
     } finally {
       transporter?.close();
     }
@@ -158,8 +172,16 @@ export abstract class BaseMailProvider implements MailProvider {
     }
   }
 
-  /** 子类覆盖，把底层错误翻译成对该服务商有意义的提示。 */
+  /**
+   * 子类覆盖，把底层错误翻译成对该服务商有意义的提示。
+   * 基类先处理所有服务商共有的两类：邮箱侧关掉 SMTP 提交、上游限流。
+   */
   protected describeFailure(cause: unknown, channel: 'imap' | 'smtp'): string {
+    const failure = classifyMailFailure(cause);
+    if (failure.kind === 'smtp_disabled') return SMTP_SUBMISSION_DISABLED_MESSAGE;
+    if (failure.kind === 'throttled') {
+      return `${channel.toUpperCase()} 被服务端限流（${failure.signal}），稍后会自动重试，无需重新授权`;
+    }
     return `${channel.toUpperCase()} 连接失败: ${messageOf(cause, '未知错误')}`;
   }
 }
@@ -170,10 +192,26 @@ function messageOf(cause: unknown, fallback: string): string {
   return typeof message === 'string' && message !== '' ? message : fallback;
 }
 
-/** 认证类失败的粗判：用于给出"换应用专用密码 / 重新授权"这类提示。 */
+/** 发信失败 -> 发信能力判定。 */
+export function smtpStatusOf(cause: unknown): AccountSmtpStatus {
+  switch (classifyMailFailure(cause).kind) {
+    case 'smtp_disabled':
+      return 'disabled';
+    case 'auth':
+      return 'auth_error';
+    default:
+      return 'error';
+  }
+}
+
+/**
+ * 认证类失败：用于给出「换应用专用密码 / 重新授权」这类提示。
+ *
+ * 旧实现是 `/auth|login|credential|password|xoauth/i.test(message)`，
+ * 于是 "Too many login attempts"（限流）和
+ * "SmtpClientAuthentication is disabled"（邮箱侧关了发信）全都被判成凭据失效。
+ * 现在统一走 classifyMailFailure：限流与抖动在认证之前判掉。
+ */
 export function isAuthFailure(cause: unknown): boolean {
-  const err = cause as { authenticationFailed?: boolean; responseCode?: number; message?: string };
-  if (err?.authenticationFailed === true) return true;
-  if (err?.responseCode === 535 || err?.responseCode === 534) return true;
-  return /auth|login|credential|password|xoauth/i.test(err?.message ?? '');
+  return classifyMailFailure(cause).kind === 'auth';
 }

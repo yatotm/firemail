@@ -11,7 +11,9 @@ import {
   removeAccountsFromCache,
   replaceAccountInCache,
 } from '@/lib/accounts/cache';
+import { humanizeApiError } from '@/lib/api';
 import { showErrorToast, showInfoToast, showSuccessToast, showUndoToast } from '@/lib/undo';
+import { useOptionalActivity } from '@/hooks/use-activity';
 
 /**
  * 账号列表上的写操作。可逆的（同步开关、启用/停用）走乐观更新 + 失败回滚 +
@@ -51,6 +53,7 @@ export interface AccountActions {
 
 export function useAccountActions(): AccountActions {
   const client = useQueryClient();
+  const activity = useOptionalActivity();
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
 
   const syncEnabled = useMutation<Account, unknown, { id: number; enabled: boolean }, RollbackContext>({
@@ -114,12 +117,20 @@ export function useAccountActions(): AccountActions {
         onProgress: (done, total) => setSyncProgress({ done, total }),
       });
     },
+    // 请求还没发出去就先把「进行中」摆出来：点击必须立刻有可见结果
+    onMutate: (targets) => {
+      for (const account of targets) activity.begin('sync', account.id, account.email);
+    },
     onSuccess: (outcome, targets) => {
       if (targets.length === 0) {
         showInfoToast('没有可同步的账号');
         return;
       }
       if (outcome.rejected.length > 0) {
+        // 发起就失败的，SSE 永远不会给它一个终态，必须在这里落定
+        for (const account of targets.slice(outcome.fulfilled.length)) {
+          activity.settle('sync', account.id, 'error', humanizeApiError(outcome.rejected[0]));
+        }
         showErrorToast(`${outcome.rejected.length} 个账号无法发起同步`, outcome.rejected[0]);
         return;
       }
@@ -130,7 +141,12 @@ export function useAccountActions(): AccountActions {
           : `已请求同步 ${targets.length} 个账号`,
       );
     },
-    onError: (error) => showErrorToast('同步请求失败', error),
+    onError: (error, targets) => {
+      for (const account of targets) {
+        activity.settle('sync', account.id, 'error', humanizeApiError(error));
+      }
+      showErrorToast('同步请求失败', error);
+    },
     onSettled: () => {
       setSyncProgress(null);
       invalidateAccountData(client);

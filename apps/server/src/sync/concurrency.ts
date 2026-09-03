@@ -106,3 +106,20 @@ export function withTimeout(timeoutMs: number, external?: AbortSignal): AbortSig
   const own = AbortSignal.timeout(timeoutMs);
   return external ? AbortSignal.any([external, own]) : own;
 }
+
+/**
+ * 可取消的等待。退避期间同步可能已经超时，这时必须立刻醒来，
+ * 否则一次 60 秒的服务端建议退避会把整轮同步的时限全部吃掉。
+ */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}

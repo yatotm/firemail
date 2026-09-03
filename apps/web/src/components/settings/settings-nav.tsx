@@ -46,7 +46,7 @@ function SettingsNavLink({
       className={({ isActive }) =>
         cn(
           'flex h-8 items-center rounded-md px-2 text-sm whitespace-nowrap transition-colors',
-          'outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+          'focus-ring',
           isActive
             ? 'bg-accent font-medium text-accent-foreground'
             : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',

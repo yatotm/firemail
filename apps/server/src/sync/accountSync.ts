@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm';
+import { computeBackoffMs } from '../auth/oauth/errors.ts';
 import { accounts, syncRuns } from '../db/schema.ts';
-import { withTimeout } from './concurrency.ts';
+import { classifyMailFailure, isRetryableFailure, type MailFailureKind } from '../providers/failures.ts';
+import { sleep, withTimeout } from './concurrency.ts';
 import { syncFolder, throwIfAborted, type FolderSyncOptions } from './folderSync.ts';
 import { syncFolders } from './folders.ts';
 import {
@@ -19,11 +21,36 @@ import {
  */
 export const DEFAULT_ACCOUNT_TIMEOUT_MS = 120_000;
 
+/**
+ * 建连的重试次数（含首次）。
+ *
+ * 上游限流是**瞬时**的：实测被拒的账号在下一个 5 分钟周期就自行恢复。
+ * 3 次已经覆盖了这种抖动；再多只是在服务端说「慢点」的时候继续加压。
+ */
+export const DEFAULT_CONNECT_ATTEMPTS = 3;
+
+/**
+ * 退避参数，复用 OAuth 层的 `computeBackoffMs`（指数 + 等量抖动），
+ * 29 个账号同时被限流时不会保持同步、整齐划一地再撞一次。
+ *
+ * 上限取 15 秒而不是 OAuth 那边的 60 秒：账号同步自己只有 120 秒时限，
+ * 而 `ETHROTTLE` 携带的服务端建议退避动辄 60~90 秒（imapflow 在拒绝之前
+ * 其实已经替我们等过一轮了），照单全收会把整轮同步的预算耗在等待上。
+ * 剩下的等待由调度器的「每账号冷却」承担——那才是可以长时间等的地方。
+ */
+export const CONNECT_BACKOFF_BASE_MS = 1_000;
+export const CONNECT_BACKOFF_MAX_MS = 15_000;
+
 export interface AccountSyncOptions extends Omit<FolderSyncOptions, 'signal'> {
   /** 只同步这些路径；不传则同步全部可选中的文件夹。 */
   folderPaths?: string[];
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** 建连尝试次数（含首次）。 */
+  connectAttempts?: number;
+  /** 注入点：测试用来跳过真实等待。 */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  random?: () => number;
 }
 
 /**
@@ -50,7 +77,7 @@ export async function syncAccount(
 
   try {
     throwIfAborted(signal);
-    client = await deps.connect(account);
+    client = await connectWithRetry(deps, account, signal, options);
 
     const listed = await syncFolders(deps.db, account.id, client);
     const wanted = options.folderPaths && new Set(options.folderPaths);
@@ -78,10 +105,11 @@ export async function syncAccount(
 
   const newMessages = results.reduce((sum, folder) => sum + folder.newMessages, 0);
   const error = failure == null ? null : describe(failure);
+  const failureKind = failure == null ? null : classifyMailFailure(failure).kind;
   const finishedAt = Date.now();
 
   closeSyncRun(deps, runId, { finishedAt, newMessages, error });
-  updateAccountHealth(deps, account, { finishedAt, error, failure });
+  updateAccountHealth(deps, account, { finishedAt, error, failureKind });
 
   return {
     accountId: account.id,
@@ -92,7 +120,50 @@ export async function syncAccount(
     error,
     startedAt,
     finishedAt,
+    failureKind,
   };
+}
+
+/**
+ * 建连失败的有界重试。
+ *
+ * 只重试限流和网络抖动：凭据被拒、主机写错这类错误重试一万次也一样，
+ * 白白占着并发名额还给上游加压。
+ */
+async function connectWithRetry(
+  deps: SyncDeps,
+  account: AccountRow,
+  signal: AbortSignal,
+  options: AccountSyncOptions,
+): Promise<ImapClient> {
+  const attempts = Math.max(1, options.connectAttempts ?? DEFAULT_CONNECT_ATTEMPTS);
+  const wait = options.sleep ?? sleep;
+  const random = options.random ?? Math.random;
+
+  for (let attempt = 0; ; attempt += 1) {
+    throwIfAborted(signal);
+    try {
+      return await deps.connect(account);
+    } catch (error) {
+      const failure = classifyMailFailure(error);
+      if (attempt >= attempts - 1 || !isRetryableFailure(failure) || signal.aborted) throw error;
+
+      const waitMs = computeBackoffMs(attempt, {
+        baseMs: CONNECT_BACKOFF_BASE_MS,
+        maxMs: CONNECT_BACKOFF_MAX_MS,
+        retryAfterMs: failure.retryAfterMs,
+        random,
+      });
+      deps.log?.warn('IMAP 建连暂时失败，退避后重试', {
+        accountId: account.id,
+        attempt: attempt + 1,
+        kind: failure.kind,
+        signal: failure.signal,
+        waitMs,
+      });
+      await wait(waitMs, signal);
+    }
+  }
 }
 
 function openSyncRun(deps: SyncDeps, accountId: number, startedAt: number): number | null {
@@ -128,22 +199,23 @@ function closeSyncRun(
 }
 
 /**
- * 账号健康度。认证失败要和网络抖动区分开：
- * 前者需要用户重新授权，后者下一轮自己就好了，混在一起报警等于没报警。
+ * 账号健康度。认证失败要和限流/网络抖动区分开：
+ * 前者需要用户重新授权，后者退避几秒就好了，混在一起报警等于没报警。
+ *
+ * 限流与抖动**不写 status**：生产上出现过 token 刚刷新成功的账号因为一次
+ * 瞬时拒绝被标成 error，用户被要求去做一次毫无必要的设备码授权。
+ * 只留 lastError 作为痕迹——静默吞掉同样是错的。
  */
 function updateAccountHealth(
   deps: SyncDeps,
   account: AccountRow,
-  { finishedAt, error, failure }: { finishedAt: number; error: string | null; failure: unknown },
+  {
+    finishedAt,
+    error,
+    failureKind,
+  }: { finishedAt: number; error: string | null; failureKind: MailFailureKind | null },
 ): void {
-  const patch =
-    error === null
-      ? { status: 'active', lastError: null, lastErrorAt: null, lastSyncedAt: new Date(finishedAt) }
-      : {
-          status: isAuthFailure(failure) ? 'auth_error' : 'error',
-          lastError: error.slice(0, 2000),
-          lastErrorAt: new Date(finishedAt),
-        };
+  const patch = healthPatch(error, failureKind, finishedAt);
 
   deps.db
     .update(accounts)
@@ -152,12 +224,17 @@ function updateAccountHealth(
     .run();
 }
 
-function isAuthFailure(error: unknown): boolean {
-  if (error == null || typeof error !== 'object') return false;
-  const candidate = error as { authenticationFailed?: unknown; serverResponseCode?: unknown; code?: unknown };
-  if (candidate.authenticationFailed === true) return true;
-  const code = String(candidate.serverResponseCode ?? candidate.code ?? '').toUpperCase();
-  return code.includes('AUTHENTICATIONFAILED') || code.includes('AUTHORIZATIONFAILED');
+function healthPatch(
+  error: string | null,
+  failureKind: MailFailureKind | null,
+  finishedAt: number,
+): Record<string, unknown> {
+  if (error === null) {
+    return { status: 'active', lastError: null, lastErrorAt: null, lastSyncedAt: new Date(finishedAt) };
+  }
+  const trace = { lastError: error.slice(0, 2000), lastErrorAt: new Date(finishedAt) };
+  if (failureKind === 'throttled' || failureKind === 'transient') return trace;
+  return { ...trace, status: failureKind === 'auth' ? 'auth_error' : 'error' };
 }
 
 async function closeQuietly(client: ImapClient | null, deps: SyncDeps): Promise<void> {

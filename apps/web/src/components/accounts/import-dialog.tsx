@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { PROVIDER_LABEL } from '@/lib/accounts/dashboard';
 import { IMPORT_SEPARATOR, previewImport, type ImportRow } from '@/lib/accounts/import-parse';
 import { authTypeFor } from '@/lib/accounts/provider-form';
@@ -92,7 +93,7 @@ export function ImportDialog({
               <Label htmlFor="import-payload" className="text-xs">
                 粘贴账号列表
               </Label>
-              <textarea
+              <Textarea
                 id="import-payload"
                 value={payload}
                 onChange={(event) => setPayload(event.target.value)}
@@ -100,7 +101,7 @@ export function ImportDialog({
                 spellCheck={false}
                 placeholder={SAMPLE}
                 aria-describedby="import-summary"
-                className="w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="font-mono text-xs"
               />
             </div>
 

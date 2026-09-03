@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 import * as accountsApi from '@/lib/accounts/api';
 import { invalidateAccountData, readAccounts, replaceAccountInCache } from '@/lib/accounts/cache';
 import type { CreateAccountPayload, UpdateAccountPayload } from '@/lib/accounts/schemas';
+import { useOptionalActivity } from '@/hooks/use-activity';
+import { humanizeApiError } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { showErrorToast, showSuccessToast } from '@/lib/undo';
 
@@ -39,6 +41,7 @@ export interface AccountEditor {
 
 export function useAccountEditor(): AccountEditor {
   const client = useQueryClient();
+  const activity = useOptionalActivity();
 
   const create = useMutation({
     mutationFn: (body: CreateAccountPayload) => accountsApi.createAccount(body),
@@ -58,12 +61,27 @@ export function useAccountEditor(): AccountEditor {
     },
   });
 
+  // 服务端有 25 秒硬时限，中间没有任何事件；不先记一笔「进行中」，点了就是彻底没反应
   const test = useMutation({
     mutationFn: (id: number) => accountsApi.testAccount(id),
-    onSuccess: (result) => {
-      if (result.imap.ok && result.smtp.ok) showSuccessToast('连接测试通过', 'IMAP 与 SMTP 均正常');
+    onMutate: (id) => activity.begin('test', id),
+    onSuccess: (result, id) => {
+      const ok = result.imap.ok && result.smtp.ok;
+      const failed = [result.imap.ok ? null : 'IMAP', result.smtp.ok ? null : 'SMTP'].filter(
+        (name): name is string => name !== null,
+      );
+      activity.settle(
+        'test',
+        id,
+        ok ? 'success' : 'error',
+        ok ? 'IMAP 与 SMTP 均正常' : `${failed.join(' / ')} 连接失败`,
+      );
+      if (ok) showSuccessToast('连接测试通过', 'IMAP 与 SMTP 均正常');
     },
-    onError: (error) => showErrorToast('连接测试失败', error),
+    onError: (error, id) => {
+      activity.settle('test', id, 'error', humanizeApiError(error));
+      showErrorToast('连接测试失败', error);
+    },
   });
 
   return {

@@ -66,8 +66,7 @@ export function SimpleTabs({
               onClick={() => onValueChange(item.value)}
               onKeyDown={move}
               className={cn(
-                'h-9 rounded-t-sm px-3 text-sm transition-colors outline-none',
-                'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                'focus-ring-inset h-9 rounded-t-sm px-3 text-sm transition-colors',
                 selected
                   ? 'border-b-2 border-primary font-medium text-foreground'
                   : 'text-muted-foreground hover:text-foreground',
@@ -85,7 +84,7 @@ export function SimpleTabs({
           role="tabpanel"
           aria-labelledby={`${id}-tab-${active.value}`}
           tabIndex={0}
-          className="py-3 outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          className="focus-ring-inset py-3"
         >
           {active.content}
         </div>

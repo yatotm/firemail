@@ -2,8 +2,10 @@ import type { Account } from '@firemail/shared';
 import {
   ChevronDownIcon,
   ChevronRightIcon,
+  ChevronsUpDownIcon,
   FlameIcon,
-  PanelLeftIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
   SettingsIcon,
   UsersIcon,
 } from 'lucide-react';
@@ -14,6 +16,7 @@ import { AccountHealthBanner } from '@/components/layout/account-health-banner';
 import { SidebarItem } from '@/components/layout/sidebar-item';
 import { UserMenu } from '@/components/layout/user-menu';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { sortAccountsByHealth } from '@/hooks/use-accounts';
 import { viewCount } from '@/hooks/use-summary';
 import { formatCount } from '@/lib/format';
@@ -73,19 +76,39 @@ export function Sidebar({
         collapsed ? 'w-sidebar-rail items-stretch' : 'w-sidebar',
       )}
     >
+      {/*
+        折叠态下只剩这一个按钮：品牌字和标题都收起来了，展开的入口必须留着。
+        （之前这里是 `collapsed && 'hidden'`，一旦折叠就没有任何可见的展开入口，
+        只能靠 `[` 键或命令面板猜——等于把侧栏折没了。）
+      */}
       <div className={cn('flex h-12 items-center gap-2 px-1', collapsed && 'justify-center px-0')}>
-        <FlameIcon className="size-5 shrink-0 text-primary" aria-hidden />
-        {collapsed ? null : <span className="flex-1 font-semibold">FireMail</span>}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={onToggleCollapsed}
-          aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
-          aria-pressed={collapsed}
-          className={cn('shrink-0', collapsed && 'hidden')}
-        >
-          <PanelLeftIcon aria-hidden />
-        </Button>
+        {collapsed ? null : (
+          <>
+            <FlameIcon className="size-5 shrink-0 text-primary" aria-hidden />
+            <span className="flex-1 font-semibold">FireMail</span>
+          </>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onToggleCollapsed}
+              aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
+              aria-expanded={!collapsed}
+              className="shrink-0"
+            >
+              {collapsed ? (
+                <PanelLeftOpenIcon aria-hidden />
+              ) : (
+                <PanelLeftCloseIcon aria-hidden />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            {collapsed ? '展开侧栏' : '折叠侧栏'} [
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <AccountHealthBanner accounts={accounts} collapsed={collapsed} onNavigate={onNavigate} />
@@ -194,6 +217,7 @@ export function Sidebar({
           ))}
         </ul>
 
+        {/* 图标与「账号管理」区分开：两者都用 UsersIcon 时，用户分不出哪个是筛选器、哪个是设置页 */}
         <button
           type="button"
           onClick={onOpenAccountSwitcher}
@@ -202,7 +226,7 @@ export function Sidebar({
             collapsed && 'justify-center px-0',
           )}
         >
-          <UsersIcon className="size-4 shrink-0" aria-hidden />
+          <ChevronsUpDownIcon className="size-4 shrink-0" aria-hidden />
           {collapsed ? (
             <span className="sr-only">全部账号（{accounts.length}）</span>
           ) : (

@@ -134,7 +134,7 @@ export function MessageList({
       aria-busy={busy || undefined}
       {...(activeId === null ? {} : { 'aria-activedescendant': `msg-${String(activeId)}` })}
       tabIndex={0}
-      className="group/list min-h-0 flex-1 overflow-y-auto scroll-pt-6 outline-none focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
+      className="focus-ring-inset group/list min-h-0 flex-1 overflow-y-auto scroll-pt-6"
     >
       <div style={{ height: virtual.totalSize }} className="relative">
         <div style={{ transform: `translateY(${String(virtual.paddingTop)}px)` }}>

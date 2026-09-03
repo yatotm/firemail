@@ -2,10 +2,19 @@ export {
   BaseMailProvider,
   DEFAULT_TIMEOUTS,
   isAuthFailure,
+  smtpStatusOf,
   type BaseProviderDeps,
   type ProviderTimeouts,
 } from './base.ts';
 export { AccountCredentialResolver } from './credentials.ts';
+export {
+  SMTP_SUBMISSION_DISABLED_MESSAGE,
+  classifyMailFailure,
+  isRetryableFailure,
+  isSmtpSubmissionDisabled,
+  type MailFailure,
+  type MailFailureKind,
+} from './failures.ts';
 export {
   PROVIDER_AUTH_TYPES,
   PROVIDER_DEFAULTS,

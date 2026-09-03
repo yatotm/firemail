@@ -60,6 +60,8 @@ function ChangePasswordForm() {
           void submit();
         }}
       >
+        {/* 密码管理器要靠一个 username 字段才肯把新口令存对账号；它 hidden，不参与视觉 */}
+        {/* eslint-disable-next-line firemail/no-raw-form-elements */}
         <input type="text" name="username" autoComplete="username" hidden readOnly value="" />
         <TextField
           id="current-password"

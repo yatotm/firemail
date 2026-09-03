@@ -52,7 +52,7 @@ export function AccountsToolbar({
           value={filters.q}
           placeholder="搜索邮箱或显示名"
           aria-label="搜索账号"
-          className="h-8 pl-8"
+          className="pl-8"
           onChange={(event) => onFilterChange({ q: event.target.value })}
         />
       </div>
@@ -77,7 +77,7 @@ export function AccountsToolbar({
         className="w-36"
       />
 
-      <Button variant="outline" size="sm" onClick={onSyncAll} disabled={syncing}>
+      <Button variant="outline" onClick={onSyncAll} disabled={syncing}>
         <RefreshCwIcon className={syncing ? 'animate-spin' : undefined} aria-hidden />
         {syncProgress ? `同步中 ${syncProgress.done}/${syncProgress.total}` : '全部同步'}
       </Button>

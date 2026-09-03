@@ -117,7 +117,7 @@ export function ReauthDialog({
                       href={view.verificationUri}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="min-w-0 flex-1 truncate rounded-sm text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                      className="focus-ring min-w-0 flex-1 truncate rounded-sm text-sm text-primary underline-offset-4 hover:underline"
                     >
                       {view.verificationUri}
                     </a>

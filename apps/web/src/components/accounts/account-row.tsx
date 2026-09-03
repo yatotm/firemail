@@ -78,7 +78,7 @@ export const AccountRow = forwardRef<HTMLButtonElement, AccountRowProps>(functio
             type="button"
             onClick={() => onOpen(account)}
             onFocus={() => onFocusRow(account)}
-            className="min-w-0 flex-1 rounded-sm text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="focus-ring min-w-0 flex-1 rounded-sm text-left"
           >
             <span className="block truncate text-sm" title={account.email}>
               {account.email}

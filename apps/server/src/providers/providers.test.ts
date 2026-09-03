@@ -198,6 +198,7 @@ test('verify 永不抛错：连不上时把原因写进结果', async () => {
   assert.equal(result.smtp.ok, false);
   assert.ok(result.imap.message);
   assert.ok(result.smtp.message);
+  assert.equal(result.smtp.status, 'error', '连不上不是「发信被关闭」，也不是凭据问题');
 });
 
 test('凭据解析：密码账号解密后交给建连，明文不落在账号视图上', async () => {
@@ -321,4 +322,47 @@ test('各服务商的认证失败提示指向正确的修复动作', () => {
   assert.match(describe(new GmailProvider(deps)), /应用专用密码/);
   assert.match(describe(new QqProvider(deps)), /授权码/);
   assert.match(describe(new GenericImapProvider(deps)), /用户名与密码/);
+});
+
+test('限流不再被当成认证失败：四个服务商都不提示换凭据', () => {
+  const deps = { credentials: recordingResolver({ kind: 'password', user: 'u', pass: 'p' }) };
+  const throttled = Object.assign(new Error('Command failed'), {
+    responseStatus: 'NO',
+    serverResponseCode: 'UNAVAILABLE',
+    responseText: 'Server unavailable. 15',
+    authenticationFailed: true,
+  });
+  const describe = (p: object): string =>
+    (p as { describeFailure(c: unknown, ch: string): string })['describeFailure'](throttled, 'imap');
+
+  for (const provider of [
+    new OutlookProvider(deps),
+    new GmailProvider(deps),
+    new QqProvider(deps),
+    new GenericImapProvider(deps),
+  ]) {
+    const message = describe(provider);
+    assert.match(message, /限流/, provider.id);
+    assert.doesNotMatch(message, /需要重新授权|应用专用密码|授权码|核对用户名/, provider.id);
+  }
+});
+
+test('邮箱侧关闭 SMTP 提交时给出准确文案，且不引导重新授权', () => {
+  const deps = { credentials: recordingResolver({ kind: 'password', user: 'u', pass: 'p' }) };
+  const disabled = Object.assign(
+    new Error(
+      'Invalid login: 535 5.7.139 Authentication unsuccessful, ' +
+        'SmtpClientAuthentication is disabled for the Mailbox.',
+    ),
+    { code: 'EAUTH', responseCode: 535 },
+  );
+  const message = (
+    new OutlookProvider(deps) as unknown as {
+      describeFailure(c: unknown, ch: string): string;
+    }
+  ).describeFailure(disabled, 'smtp');
+
+  assert.match(message, /https:\/\/aka\.ms\/smtp_auth_disabled/);
+  assert.match(message, /重新授权不能解决/);
+  assert.doesNotMatch(message, /设备码/);
 });

@@ -9,6 +9,7 @@ import { ComposeWindow } from '@/components/compose/compose-window';
 import { MessageList } from '@/components/mail/message-list';
 import { SearchFiltersPanel } from '@/components/mail/search-filters';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useAccounts } from '@/hooks/use-accounts';
 import { useAnnouncer } from '@/hooks/use-announcer';
 import { useDensity } from '@/hooks/use-density';
@@ -164,17 +165,18 @@ export function SearchPage() {
             event.preventDefault();
             submit(input);
           }}
-          className="flex h-10 items-center gap-2 rounded-md border border-input px-3 focus-within:border-ring"
+          className="focus-ring-within flex h-10 items-center gap-2 rounded-md border border-input px-3"
         >
           <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <input
+          <Input
+            variant="bare"
             ref={inputRef}
             type="search"
             value={input}
             onChange={(event) => setInput(event.target.value)}
             placeholder={`搜索全部 ${accounts.length} 个账号`}
             aria-label="搜索邮件"
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="flex-1 text-sm"
           />
           {input ? (
             <Button

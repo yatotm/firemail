@@ -1,144 +1,21 @@
-import { useId, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectOption } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 
 /**
- * 管理类屏幕（账号 / 设置 / 用户）共用的表单控件。
+ * 管理类屏幕（账号 / 设置 / 用户）共用的**布局型**表单控件：
+ * 一行设置、竖排设置块、带错误连线的字段。
  *
- * 放在 settings 下是因为这里的形态由「设置」定义：开关立即生效、
- * 只有需要校验的输入才有显式保存按钮（screens.md §7）。
+ * 真正的控件基元（Input / Select / Textarea / Checkbox / Switch / RadioGroup）
+ * 一律在 `components/ui/` 下，样式只在 globals.css 定义一次；这里只做组合。
  * 账号管理与用户管理复用同一批控件，管理员界面不另起一套更丑的样式（accessibility.md 反模式 #14）。
  */
 
-export function Switch({
-  checked,
-  onCheckedChange,
-  disabled,
-  label,
-  id,
-  className,
-}: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  disabled?: boolean;
-  /** 没有可见文字标签时必须给它，图标/开关不能只靠上下文表意。 */
-  label: string;
-  id?: string;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      id={id}
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      onClick={() => onCheckedChange(!checked)}
-      className={cn(
-        'inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors outline-none',
-        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-        checked ? 'bg-primary' : 'bg-input/60',
-        className,
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          'pointer-events-none block size-4 rounded-full bg-background shadow-xs transition-transform',
-          checked ? 'translate-x-4.5' : 'translate-x-0.5',
-        )}
-      />
-    </button>
-  );
-}
-
-export function Checkbox({
-  checked,
-  indeterminate = false,
-  onCheckedChange,
-  label,
-  className,
-  disabled,
-}: {
-  checked: boolean;
-  indeterminate?: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  label: string;
-  className?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <input
-      type="checkbox"
-      ref={(node) => {
-        if (node) node.indeterminate = indeterminate;
-      }}
-      checked={checked}
-      disabled={disabled}
-      aria-label={label}
-      aria-checked={indeterminate ? 'mixed' : checked}
-      onChange={(event) => onCheckedChange(event.target.checked)}
-      className={cn(
-        'size-4 shrink-0 accent-primary outline-none',
-        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
-        className,
-      )}
-    />
-  );
-}
-
-export interface RadioOption<T extends string> {
-  value: T;
-  label: string;
-  description?: string;
-}
-
-/** 单选组：用原生 radio，键盘行为和屏幕阅读器播报都不用自己实现。 */
-export function RadioGroup<T extends string>({
-  name,
-  value,
-  options,
-  onChange,
-  className,
-}: {
-  name: string;
-  value: T;
-  options: readonly RadioOption<T>[];
-  onChange: (value: T) => void;
-  className?: string;
-}) {
-  const id = useId();
-  return (
-    <div role="radiogroup" aria-label={name} className={cn('flex flex-col gap-1.5', className)}>
-      {options.map((option) => (
-        <label
-          key={option.value}
-          htmlFor={`${id}-${option.value}`}
-          className="flex cursor-pointer items-start gap-2 text-sm"
-        >
-          <input
-            id={`${id}-${option.value}`}
-            type="radio"
-            name={`${id}-${name}`}
-            value={option.value}
-            checked={value === option.value}
-            onChange={() => onChange(option.value)}
-            className="mt-0.5 size-4 shrink-0 accent-primary outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          />
-          <span className="min-w-0">
-            <span className="block">{option.label}</span>
-            {option.description ? (
-              <span className="block text-xs text-muted-foreground">{option.description}</span>
-            ) : null}
-          </span>
-        </label>
-      ))}
-    </div>
-  );
-}
+export { Checkbox } from '@/components/ui/checkbox';
+export { RadioGroup, type RadioOption } from '@/components/ui/radio-group';
+export { Switch } from '@/components/ui/switch';
 
 /** 一行设置：左边说明，右边控件。开关类改完立即保存，没有保存按钮。 */
 export function SettingRow({
@@ -281,7 +158,7 @@ export function TextField({
   );
 }
 
-/** 原生 select：选项少、无需搜索的地方（服务商、筛选）用它最省事也最可访问。 */
+/** 带 label 的 Select。选项少、无需搜索的地方（服务商、筛选）用它。 */
 export function SelectField<T extends string>({
   id,
   label,
@@ -304,21 +181,13 @@ export function SelectField<T extends string>({
       <Label htmlFor={id} className={cn('text-xs', srOnlyLabel && 'sr-only')}>
         {label}
       </Label>
-      <select
-        id={id}
-        value={value}
-        onChange={(event) => onChange(event.target.value as T)}
-        className={cn(
-          'h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-xs outline-none',
-          'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50',
-        )}
-      >
+      <Select id={id} value={value} onChange={(event) => onChange(event.target.value as T)}>
         {options.map((option) => (
-          <option key={option.value} value={option.value}>
+          <SelectOption key={option.value} value={option.value}>
             {option.label}
-          </option>
+          </SelectOption>
         ))}
-      </select>
+      </Select>
     </div>
   );
 }

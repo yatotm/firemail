@@ -1,6 +1,7 @@
 import type { EmailAddress } from '@firemail/shared';
 import { XIcon } from 'lucide-react';
 import { useState, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { Input } from '@/components/ui/input';
 import { addressKey, formatAddress, parseAddressList } from '@/lib/mail/addresses';
 import { cn } from '@/lib/utils';
 
@@ -71,7 +72,7 @@ export function RecipientInput({
   const hasError = error !== undefined || invalid.length > 0;
 
   return (
-    <div className="flex items-start gap-2 border-b px-3 py-1.5">
+    <div className="focus-ring-within-inset flex items-start gap-2 border-b px-3 py-1.5">
       <label htmlFor={id} className="mt-1.5 w-12 shrink-0 text-2xs text-muted-foreground">
         {label}
       </label>
@@ -102,7 +103,8 @@ export function RecipientInput({
           );
         })}
 
-        <input
+        <Input
+          variant="bare"
           id={id}
           type="text"
           inputMode="email"
@@ -121,7 +123,7 @@ export function RecipientInput({
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           onBlur={() => commit(text)}
-          className="h-7 min-w-32 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          className="h-7 min-w-32 flex-1 text-sm"
         />
       </div>
 

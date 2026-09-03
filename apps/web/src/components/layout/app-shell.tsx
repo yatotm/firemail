@@ -63,6 +63,19 @@ export function AppShell() {
     });
   }, []);
 
+  /**
+   * 账号切换器在**所有**屏幕上都渲染，不再由 `showScope` 决定挂不挂载。
+   *
+   * 之前它只挂在邮件路由上，而它的两个入口（侧栏「全部账号」按钮、全局键位 `g a`）
+   * 到处都在：在 /settings 上点一下，`open=true` 被写进 state 却没有任何组件在听 ——
+   * 点击成了无声的空操作，而这个 true 会一直留着，等下次进 /mail 时切换器才带着它挂载、
+   * 自己弹开。两个缺陷同源。
+   *
+   * 修法是让状态和渲染它的组件永远在同一处：picker 就地打开，选中账号后由
+   * `setScope` 导航到邮件列表（它本来就是筛选邮件列表用的）。这样点击必定有可见反馈，
+   * 也不存在能跨路由留存的排队标志。`g a` 在 interactions.md §1.2 是全局键位，
+   * 因此不能改成「在别的屏幕上把入口藏掉」。
+   */
   const openAccountSwitcher = useCallback(() => setSwitcherOpen(true), []);
 
   const syncScope = useSyncScope(accounts, scope);

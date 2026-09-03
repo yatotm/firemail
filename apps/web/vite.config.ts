@@ -27,7 +27,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/lib/test/setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    // eslint 规则住在 tools/ 下（配置文件要能 import 它），它的单测也跟着放那儿
+    include: ['src/**/*.test.{ts,tsx}', 'tools/**/*.test.js'],
     restoreMocks: true,
   },
 });

@@ -1,6 +1,7 @@
 import type { Account } from '@firemail/shared';
 import { CommandIcon, KeyboardIcon, MenuIcon, RefreshCwIcon, SearchIcon } from 'lucide-react';
 import { useNavigate } from 'react-router';
+import { ActivityCenter } from '@/components/layout/activity-center';
 import { ScopeSwitcher } from '@/components/layout/scope-switcher';
 import { ThemeToggle } from '@/components/layout/theme-toggle';
 import { Button } from '@/components/ui/button';
@@ -57,16 +58,21 @@ export function TopBar({
         <MenuIcon aria-hidden />
       </Button>
 
+      {/*
+        切换器在所有屏幕上都渲染：它的入口（侧栏「全部账号」、全局键位 `g a`）到处都在，
+        只在邮件路由上挂载它会让别处的点击变成无声空操作，并把 open=true 留到下次导航时
+        自己弹出来。`showScope` 现在只管后面那截「/ 视图名」面包屑。
+      */}
+      <ScopeSwitcher
+        accounts={accounts}
+        scope={scope}
+        onScopeChange={onScopeChange}
+        open={scopeSwitcherOpen}
+        onOpenChange={onScopeSwitcherOpenChange}
+        totalUnread={totalUnread}
+      />
       {showScope ? (
         <>
-          <ScopeSwitcher
-            accounts={accounts}
-            scope={scope}
-            onScopeChange={onScopeChange}
-            open={scopeSwitcherOpen}
-            onOpenChange={onScopeSwitcherOpenChange}
-            totalUnread={totalUnread}
-          />
           <span className="hidden text-sm text-muted-foreground sm:inline" aria-hidden>
             /
           </span>
@@ -93,6 +99,8 @@ export function TopBar({
           </TooltipTrigger>
           <TooltipContent>同步 Shift+R</TooltipContent>
         </Tooltip>
+
+        <ActivityCenter />
 
         <Tooltip>
           <TooltipTrigger asChild>
