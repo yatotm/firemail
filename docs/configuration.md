@@ -8,10 +8,10 @@ FireMail 的配置只有一个来源：**环境变量**。没有配置文件，�
 > 空字符串按「没设置」处理。`docker-compose.yml` 里的 `FOO: ${FOO:-}` 传的是空串而不是不传，
 > 这个约定让 compose 里可以安全地列出所有可选项。
 
-> **`.env` 不等于容器环境。** Compose 的 `.env` 只做变量替换：只有在 `docker-compose.yml`
-> 的 `environment:` 里被显式引用的名字才会传进容器，目前是 `TZ` 与 `FIREMAIL_ENCRYPTION_KEY`。
-> 要让本文列出的其它变量通过 `.env` 生效，给服务加一行 `env_file: .env`，
-> 或把那一项写进 `environment:` 块。
+> **`.env` 生效靠的是 `env_file`。** Compose 的 `.env` 本身只做 `${}` 变量替换，不会把变量注入容器。
+> 本仓库的 `docker-compose.yml` 已经声明了 `env_file: [{path: .env, required: false}]`，
+> 所以本文列出的变量直接写进 `.env` 即可生效，文件不存在也不会报错。
+> `environment:` 块里显式列出的项（`TZ`、`FIREMAIL_ENCRYPTION_KEY` 等）优先级更高。
 
 ---
 
