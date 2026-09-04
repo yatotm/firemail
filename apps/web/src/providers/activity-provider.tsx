@@ -20,6 +20,8 @@ import { queryKeys } from '@/lib/query-keys';
 const TICK_MS = 5_000;
 /** SSE 不通时的兜底轮询间隔：拿不到事件就自己去问一次账号列表。 */
 const DEGRADED_POLL_MS = 15_000;
+/** 一次轮询刷这两组数据：账号状态（含 auth_error）与侧栏计数。 */
+const DEGRADED_KEYS = [queryKeys.accounts, queryKeys.summary] as const;
 /** 同步状态播报节流（accessibility.md §2.4）：29 个账号并发同步会产生海量事件。 */
 const ANNOUNCE_THROTTLE_MS = 5_000;
 
@@ -33,13 +35,12 @@ const ANNOUNCE_THROTTLE_MS = 5_000;
  *    绝不静默地什么都不显示（那正是旧版「点了没反应」的成因）。
  */
 export function ActivityProvider({ children }: { children: ReactNode }) {
-  const { status } = useServerEvents();
+  const { link } = useServerEvents();
   const queryClient = useQueryClient();
   const accountsQuery = useAccounts();
   const { announce } = useAnnouncer();
 
   const [entries, setEntries] = useState<readonly ActivityEntry[]>([]);
-  const connected = status === 'open';
 
   const accounts = accountsQuery.data;
   const emailOf = useCallback(
@@ -86,21 +87,25 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   // 心跳：清过期、断线时把久等无果的记录标成 stale
   useEffect(() => {
     const timer = window.setInterval(() => {
-      setEntries((current) => tick(current, { now: Date.now(), connected }));
+      setEntries((current) => tick(current, { now: Date.now(), link }));
     }, TICK_MS);
     return () => window.clearInterval(timer);
-  }, [connected]);
+  }, [link]);
 
-  // 降级轮询：SSE 不通且还有没落定的操作时，自己去问账号列表要结果
+  /**
+   * 降级轮询：SSE 不通就自己去问。
+   *
+   * 条件只看链路，**不**看有没有进行中的操作：反代把流彻底掐死时页面上一个
+   * 「进行中」都不会有，但账号状态和未读数照样在变，什么都不刷才是最坏的结果。
+   */
   const unresolved = unresolvedCount(entries);
   useEffect(() => {
-    if (connected || unresolved === 0) return;
+    if (link !== 'offline') return undefined;
     const timer = window.setInterval(() => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.summary });
+      for (const queryKey of DEGRADED_KEYS) void queryClient.invalidateQueries({ queryKey });
     }, DEGRADED_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [connected, unresolved, queryClient]);
+  }, [link, queryClient]);
 
   // 播报进行中的数量，节流 5s；toast 不抢焦点，这里也只走 polite live region
   const lastAnnounced = useRef({ at: 0, count: -1 });
@@ -113,8 +118,8 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   }, [unresolved, announce]);
 
   const value = useMemo(
-    () => ({ entries, pending: unresolved, connected, begin, settle, clear }),
-    [entries, unresolved, connected, begin, settle, clear],
+    () => ({ entries, pending: unresolved, begin, settle, clear }),
+    [entries, unresolved, begin, settle, clear],
   );
 
   return <ActivityContext value={value}>{children}</ActivityContext>;

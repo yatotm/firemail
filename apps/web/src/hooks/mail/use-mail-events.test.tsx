@@ -8,6 +8,7 @@ import { ServerEventsContext } from '@/hooks/use-server-events';
 import { allMessages, type MessagePages } from '@/lib/mail/cache';
 import { mailKeys } from '@/lib/mail/keys';
 import { ALL_SCOPE, type MailView } from '@/lib/nav';
+import { IDLE_DIAGNOSTICS } from '@/lib/sse';
 
 /**
  * SSE 对账（interactions.md §5）。
@@ -101,6 +102,8 @@ function setup(
       handlers.add(handler);
       return () => handlers.delete(handler);
     },
+    link: 'online' as const,
+    diagnostics: { ...IDLE_DIAGNOSTICS, status: 'open' as const },
   };
 
   const wrapper = ({ children }: { children: ReactNode }) => (

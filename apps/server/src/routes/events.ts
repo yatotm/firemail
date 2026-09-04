@@ -4,7 +4,15 @@ import type { AppContext } from '../http/context.ts';
 import { parseOrThrow, rateLimited, unauthorized } from '../http/errors.ts';
 import { ConnectionLimitError, type SseSink } from '../sse/hub.ts';
 
-const querySchema = z.object({ ticket: z.string().min(1).optional() });
+const querySchema = z.object({
+  ticket: z.string().min(1).optional(),
+  /**
+   * 断点续传游标。原生 `EventSource` 只在**它自己**重连时才发 `Last-Event-ID` 头，
+   * 而我们的客户端每次重连都新建一个 EventSource（要换新票），那个头永远不会出现，
+   * 所以必须允许走查询参数。两条路都认。
+   */
+  lastEventId: z.string().max(32).optional(),
+});
 
 /**
  * 事件流的响应头。
@@ -35,9 +43,13 @@ const STREAM_HEADERS = {
  */
 export function registerEventRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/events', { config: { rateLimit: false } }, async (request, reply) => {
-    const { ticket } = parseOrThrow(querySchema, request.query ?? {});
+    const query = parseOrThrow(querySchema, request.query ?? {});
+    const { ticket } = query;
     const userId = ticket ? ctx.tickets.consume(ticket) : (request.auth?.user.id ?? null);
     if (userId === null) throw unauthorized('事件流需要有效的一次性票据');
+
+    const header = request.headers['last-event-id'];
+    const lastEventId = query.lastEventId ?? (Array.isArray(header) ? header[0] : header) ?? null;
 
     // 容量检查放在劫持之前：超限时还能正常回一个 JSON 429，
     // 劫持之后就只能往流里写错误帧了
@@ -50,11 +62,14 @@ export function registerEventRoutes(app: FastifyInstance, ctx: AppContext): void
     reply.raw.writeHead(200, { ...STREAM_HEADERS });
 
     try {
-      const connection = ctx.hub.add(userId, toSink(reply));
+      const connection = ctx.hub.add(userId, toSink(reply), { lastEventId });
       // 劫持之后 fastify 不会再跑 onResponse，访问日志里连一行都不会有。
       // 长连接的开与关必须自己记，否则「流为什么断了」在服务端就是一片空白。
       const openedAt = Date.now();
-      request.log.info({ userId, connectionId: connection.id }, 'SSE 已连接');
+      request.log.info(
+        { userId, connectionId: connection.id, lastEventId, replayed: connection.replayed },
+        'SSE 已连接',
+      );
       reply.raw.on('close', () => {
         request.log.info(
           { userId, connectionId: connection.id, durationMs: Date.now() - openedAt },

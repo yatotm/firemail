@@ -8,17 +8,30 @@ import { ServerEventsContext } from '@/hooks/use-server-events';
 import { api, API_BASE } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';
 import { queryKeys } from '@/lib/query-keys';
-import { SseClient, type SseStatus } from '@/lib/sse';
+import {
+  IDLE_DIAGNOSTICS,
+  LINK_OFFLINE_AFTER_MS,
+  SseClient,
+  linkStateOf,
+  type SseDiagnostics,
+  type SseLinkState,
+} from '@/lib/sse';
 
 const sseTicketSchema = z.object({ ticket: z.string(), expiresAt: z.number().optional() });
 
 /**
  * EventSource 不能带请求头，凭据只能进 URL，所以服务端要求先换一张 30 秒的一次性票。
  * 每次（重）连都要换一张新的。
+ *
+ * `lastEventId` 一并带上：原生 EventSource 只在它自己重连时才发 `Last-Event-ID` 头，
+ * 而我们每次重连都新建一个实例（要换票），那个头永远不会出现。
+ * 没有它，断线期间的 `sync:done` 会整段丢掉，活动中心那条记录就永远转圈。
  */
-async function eventsUrl(): Promise<string> {
+async function eventsUrl(lastEventId: string | null): Promise<string> {
   const { ticket } = await api.post(endpoints.sseTicket, undefined, { schema: sseTicketSchema });
-  return `${API_BASE}${endpoints.events}?ticket=${encodeURIComponent(ticket)}`;
+  const params = new URLSearchParams({ ticket });
+  if (lastEventId) params.set('lastEventId', lastEventId);
+  return `${API_BASE}${endpoints.events}?${params.toString()}`;
 }
 
 /** 页面隐藏超过这个时长就主动断开：29 个账号的长连接不该挂在后台标签页里。 */
@@ -34,8 +47,9 @@ export function ServerEventsProvider({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const [status, setStatus] = useState<SseStatus>('idle');
+  const [diagnostics, setDiagnostics] = useState<SseDiagnostics>(IDLE_DIAGNOSTICS);
   const [syncingAccountIds, setSyncingAccountIds] = useState<ReadonlySet<number>>(new Set());
+  const link = useLinkState(diagnostics);
 
   const handlers = useRef(new Set<(event: ServerEvent) => void>());
   /** 每个账号每个会话只弹一次授权失效 toast，否则 29 个账号能刷屏。 */
@@ -105,10 +119,10 @@ export function ServerEventsProvider({
     if (!enabled) return;
 
     const client = new SseClient({
-      url: eventsUrl,
+      url: ({ lastEventId }) => eventsUrl(lastEventId),
       onEvent: (event) => latestHandler.current(event),
-      onStatus: setStatus,
-      // 断线期间可能漏了事件，重连成功后整体刷一次
+      onStatus: (_status, next) => setDiagnostics(next),
+      // 断点续传只能补上服务端还缓存着的那一段，缺口更大时靠这次全量刷新兜底
       onReconnected: () => void queryClient.invalidateQueries(),
     });
     client.start();
@@ -129,26 +143,61 @@ export function ServerEventsProvider({
       }
       // 连接一直没断就什么都没漏；只有真的断开过才值得全量刷一次，
       // 否则每次切标签页都会把所有查询重取一遍
-      if (!disconnectedWhileHidden) return;
+      if (!disconnectedWhileHidden) {
+        client.retryNow();
+        return;
+      }
       disconnectedWhileHidden = false;
       client.start();
       void queryClient.invalidateQueries();
     };
 
+    // 人回到这个窗口 / 网络恢复时不该再等退避——退避封顶 30 秒，干等半分钟没道理
+    const retryNow = () => client.retryNow();
+
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', retryNow);
+    window.addEventListener('online', retryNow);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', retryNow);
+      window.removeEventListener('online', retryNow);
       if (hiddenTimer !== null) window.clearTimeout(hiddenTimer);
       client.stop();
     };
   }, [enabled, queryClient]);
 
   const value = useMemo(
-    () => ({ status, syncingAccountIds, subscribe }),
-    [status, syncingAccountIds, subscribe],
+    () => ({ status: diagnostics.status, link, diagnostics, syncingAccountIds, subscribe }),
+    [diagnostics, link, syncingAccountIds, subscribe],
   );
 
   return <ServerEventsContext value={value}>{children}</ServerEventsContext>;
+}
+
+/**
+ * 把诊断信息折算成界面用的链路状态。
+ *
+ * 需要一个定时器：宽限期是「断开满 5 秒」，而这段时间里不会再有任何状态变化
+ * 把组件叫醒。计时器只在断开时挂一次，恰好在宽限期结束的那一刻触发。
+ */
+function useLinkState(diagnostics: SseDiagnostics): SseLinkState {
+  const [link, setLink] = useState<SseLinkState>(() => linkStateOf(diagnostics, Date.now()));
+
+  useEffect(() => {
+    const evaluate = () => setLink(linkStateOf(diagnostics, Date.now()));
+    evaluate();
+
+    const { downSince } = diagnostics;
+    if (diagnostics.status === 'open' || downSince === null) return undefined;
+    const remaining = downSince + LINK_OFFLINE_AFTER_MS - Date.now();
+    if (remaining <= 0) return undefined;
+
+    const timer = window.setTimeout(evaluate, remaining);
+    return () => window.clearTimeout(timer);
+  }, [diagnostics]);
+
+  return link;
 }
 
 function removeFrom(set: ReadonlySet<number>, id: number): ReadonlySet<number> {

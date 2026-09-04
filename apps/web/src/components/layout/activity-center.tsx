@@ -11,8 +11,10 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useActivity } from '@/hooks/use-activity';
+import { useServerEvents } from '@/hooks/use-server-events';
 import { KIND_LABEL, type ActivityEntry } from '@/lib/activity';
 import { formatRelativeTime } from '@/lib/format';
+import { linkSummary } from '@/lib/sse';
 import { cn } from '@/lib/utils';
 
 /**
@@ -24,7 +26,7 @@ import { cn } from '@/lib/utils';
  * **断线时明说状态未知**而不是继续假装在转圈。
  */
 export function ActivityCenter() {
-  const { entries, pending, connected } = useActivity();
+  const { pending } = useActivity();
   const [open, setOpen] = useState(false);
 
   const label =
@@ -59,38 +61,65 @@ export function ActivityCenter() {
       </Tooltip>
 
       <PopoverContent align="end" className="w-88 p-0">
-        <div className="flex items-center gap-2 border-b px-3 py-2">
-          <h2 className="flex-1 text-sm font-medium">活动</h2>
-          {pending > 0 ? (
-            <span className="tnum text-2xs text-muted-foreground">{pending} 个进行中</span>
-          ) : null}
-        </div>
-
-        {connected ? null : (
-          <p
-            role="status"
-            className="flex items-center gap-2 bg-warning-subtle px-3 py-2 text-xs text-warning-subtle-foreground"
-          >
-            <WifiOffIcon className="size-3.5 shrink-0" aria-hidden />
-            实时连接已断开，下面的状态可能不是最新的；已改为定时拉取。
-          </p>
-        )}
-
-        {entries.length === 0 ? (
-          <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-            还没有进行中或最近完成的操作。
-          </p>
-        ) : (
-          <ul className="max-h-80 overflow-y-auto py-1">
-            {entries.map((entry) => (
-              <li key={entry.id}>
-                <ActivityRow entry={entry} onNavigate={() => setOpen(false)} />
-              </li>
-            ))}
-          </ul>
-        )}
+        <ActivityPanel onNavigate={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * 弹层里的内容。和触发按钮拆开是因为它有自己的状态机（连接横幅），
+ * 值得脱离 Radix 浮层单独渲染与断言。
+ */
+export function ActivityPanel({ onNavigate }: { onNavigate: () => void }) {
+  const { entries, pending } = useActivity();
+  const { link, diagnostics } = useServerEvents();
+
+  return (
+    <>
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <h2 className="flex-1 text-sm font-medium">活动</h2>
+        {pending > 0 ? (
+          <span className="tnum text-2xs text-muted-foreground">{pending} 个进行中</span>
+        ) : null}
+      </div>
+
+      {/*
+        只有真正断开（超过宽限期）才亮警告。`connecting` 什么都不显示：
+        首次建连和一次一秒的重连都会经过它，为它闪一条「已断开」是在撒谎，
+        而且流每 30 秒干净重连一次的链路会被闪成一片。
+      */}
+      {link === 'offline' ? (
+        <p
+          role="status"
+          className="flex items-center gap-2 bg-warning-subtle px-3 py-2 text-xs text-warning-subtle-foreground"
+        >
+          <WifiOffIcon className="size-3.5 shrink-0" aria-hidden />
+          {diagnostics.everOpen
+            ? '实时连接已断开，下面的状态可能不是最新的；已改为定时拉取。'
+            : '实时连接一直没能建立，下面的状态可能不是最新的；已改为定时拉取。'}
+        </p>
+      ) : null}
+
+      {entries.length === 0 ? (
+        <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+          还没有进行中或最近完成的操作。
+        </p>
+      ) : (
+        <ul className="max-h-80 overflow-y-auto py-1">
+          {entries.map((entry) => (
+            <li key={entry.id}>
+              <ActivityRow entry={entry} onNavigate={onNavigate} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* 排查反代链路用的那一行：断了几次、上条连接活了多久、怎么断的。 */}
+      <p data-testid="link-summary" className="border-t px-3 py-1.5 text-2xs text-muted-foreground">
+        {linkSummary(diagnostics)}
+      </p>
+    </>
   );
 }
 

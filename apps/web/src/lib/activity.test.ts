@@ -103,7 +103,7 @@ describe('活动记录：时间推进', () => {
   it('SSE 断开且久等无果时标成 stale，而不是继续假装在转圈', () => {
     const entries = tick([running()], {
       now: T0 + ACTIVITY_STALE_AFTER_MS + 1,
-      connected: false,
+      link: 'offline',
     });
 
     expect(entries[0]?.status).toBe('stale');
@@ -112,38 +112,52 @@ describe('活动记录：时间推进', () => {
 
   it('转 stale 时写上 endedAt，否则这条记录永远等不到 TTL 清理', () => {
     const now = T0 + ACTIVITY_STALE_AFTER_MS + 1;
-    const stale = tick([running()], { now, connected: false });
+    const stale = tick([running()], { now, link: 'offline' });
     expect(stale[0]?.endedAt).toBe(now);
 
     // 一直断着也不能让角标永远亮着
-    const aged = tick(stale, { now: now + ACTIVITY_TTL_MS + 1, connected: false });
+    const aged = tick(stale, { now: now + ACTIVITY_TTL_MS + 1, link: 'offline' });
     expect(aged).toEqual([]);
     expect(unresolvedCount(aged)).toBe(0);
   });
 
   it('连接恢复后清掉 stale 记录 —— 重连时已经全量刷过，真实状态就在页面上', () => {
-    const stale = tick([running()], { now: T0 + ACTIVITY_STALE_AFTER_MS + 1, connected: false });
+    const stale = tick([running()], { now: T0 + ACTIVITY_STALE_AFTER_MS + 1, link: 'offline' });
     expect(stale[0]?.status).toBe('stale');
 
-    const recovered = tick(stale, { now: T0 + ACTIVITY_STALE_AFTER_MS + 2, connected: true });
+    const recovered = tick(stale, { now: T0 + ACTIVITY_STALE_AFTER_MS + 2, link: 'online' });
     expect(recovered).toEqual([]);
     expect(unresolvedCount(recovered)).toBe(0);
   });
 
   it('SSE 连着的时候不标 stale —— 事件迟早会来', () => {
-    const entries = tick([running()], { now: T0 + 10 * ACTIVITY_STALE_AFTER_MS, connected: true });
+    const entries = tick([running()], { now: T0 + 10 * ACTIVITY_STALE_AFTER_MS, link: 'online' });
     expect(entries[0]?.status).toBe('running');
   });
 
   it('刚发起、还没超过阈值的不标 stale', () => {
-    const entries = tick([running()], { now: T0 + ACTIVITY_STALE_AFTER_MS - 1, connected: false });
+    const entries = tick([running()], { now: T0 + ACTIVITY_STALE_AFTER_MS - 1, link: 'offline' });
     expect(entries[0]?.status).toBe('running');
+  });
+
+  it('宽限期内的重连（connecting）不标 stale —— 一秒的抖动不是「状态未知」', () => {
+    const entries = tick([running()], {
+      now: T0 + ACTIVITY_STALE_AFTER_MS + 1,
+      link: 'connecting',
+    });
+    expect(entries[0]?.status).toBe('running');
+  });
+
+  it('connecting 也不清 stale —— 只有真的连上才算真相回来了', () => {
+    const stale = tick([running()], { now: T0 + ACTIVITY_STALE_AFTER_MS + 1, link: 'offline' });
+    const during = tick(stale, { now: T0 + ACTIVITY_STALE_AFTER_MS + 2, link: 'connecting' });
+    expect(during[0]?.status).toBe('stale');
   });
 
   it('完成很久的记录会被清掉，活动中心不是日志系统', () => {
     const done = running({ status: 'success', endedAt: T0 });
-    expect(tick([done], { now: T0 + ACTIVITY_TTL_MS + 1, connected: true })).toEqual([]);
-    expect(tick([done], { now: T0 + ACTIVITY_TTL_MS - 1, connected: true })).toHaveLength(1);
+    expect(tick([done], { now: T0 + ACTIVITY_TTL_MS + 1, link: 'online' })).toEqual([]);
+    expect(tick([done], { now: T0 + ACTIVITY_TTL_MS - 1, link: 'online' })).toHaveLength(1);
   });
 });
 

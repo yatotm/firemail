@@ -6,8 +6,6 @@ export interface ActivityContextValue {
   entries: readonly ActivityEntry[];
   /** 进行中的条数（含 stale）——用于外壳上的角标。 */
   pending: number;
-  /** SSE 是否连着。false 时活动中心会明说「结果可能不是最新的」并退化成轮询。 */
-  connected: boolean;
   /** 点击的那一刻调用，立刻产生可见的「进行中」记录。 */
   begin: (kind: ActivityKind, accountId: number, accountEmail?: string) => void;
   /** 没有对应 SSE 事件的操作（连接测试、重新授权）由发起方自己落定。 */
@@ -39,7 +37,6 @@ export function useOptionalActivity(): ActivityContextValue {
 const NOOP: ActivityContextValue = {
   entries: [],
   pending: 0,
-  connected: true,
   begin: () => undefined,
   settle: () => undefined,
   clear: () => undefined,

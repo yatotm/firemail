@@ -1,9 +1,16 @@
 import type { ServerEvent } from '@firemail/shared';
 import { createContext, use, useEffect, useRef } from 'react';
-import type { SseStatus } from '@/lib/sse';
+import type { SseDiagnostics, SseLinkState, SseStatus } from '@/lib/sse';
 
 export interface ServerEventsContextValue {
   status: SseStatus;
+  /**
+   * 给界面用的链路状态：`open` 之外的头几秒一律算 `connecting`，
+   * 别把「正在建立」说成「已断开」。
+   */
+  link: SseLinkState;
+  /** 断了几次、上条连接活了多久、怎么断的——排查反代链路用。 */
+  diagnostics: SseDiagnostics;
   /** 正在同步的账号 id —— 侧栏在对应账号后面转个小圈，不做全局 loading。 */
   syncingAccountIds: ReadonlySet<number>;
   /**

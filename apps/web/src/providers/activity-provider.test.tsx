@@ -6,29 +6,43 @@ import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useActivity } from '@/hooks/use-activity';
-import { ServerEventsContext, type ServerEventsContextValue } from '@/hooks/use-server-events';
+import {
+  ServerEventsContext,
+  useServerEvents,
+  type ServerEventsContextValue,
+} from '@/hooks/use-server-events';
 import { ACTIVITY_STALE_AFTER_MS } from '@/lib/activity';
-import type { SseStatus } from '@/lib/sse';
+import { IDLE_DIAGNOSTICS, type SseLinkState } from '@/lib/sse';
 import { ActivityProvider } from '@/providers/activity-provider';
 import { LiveRegionProvider } from '@/providers/live-region-provider';
 
 /** 手动喂事件的假 SSE：真的 EventSource 在 jsdom 里不存在，也不该在单测里连网。 */
-function makeServerEvents(status: SseStatus) {
+function makeServerEvents(link: SseLinkState) {
   const handlers = new Set<(event: ServerEvent) => void>();
-  const value: ServerEventsContextValue = {
-    status,
-    syncingAccountIds: new Set(),
-    subscribe: (handler) => {
-      handlers.add(handler);
-      return () => handlers.delete(handler);
-    },
+  return {
+    valueFor: (current: SseLinkState): ServerEventsContextValue => ({
+      status: current === 'online' ? 'open' : 'reconnecting',
+      link: current,
+      diagnostics: {
+        ...IDLE_DIAGNOSTICS,
+        status: current === 'online' ? 'open' : 'reconnecting',
+        everOpen: true,
+      },
+      syncingAccountIds: new Set(),
+      subscribe: (handler) => {
+        handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
+    }),
+    initial: link,
+    emit: (event: ServerEvent) => handlers.forEach((h) => h(event)),
   };
-  return { value, emit: (event: ServerEvent) => handlers.forEach((h) => h(event)) };
 }
 
 /** 把活动中心的状态摊平成可断言的文本，避免依赖 Popover 浮层。 */
 function Probe() {
-  const { entries, pending, connected, begin, settle } = useActivity();
+  const { entries, pending, begin, settle } = useActivity();
+  const { link } = useServerEvents();
 
   return (
     <div>
@@ -39,7 +53,7 @@ function Probe() {
         测试失败
       </button>
       <p data-testid="pending">{pending}</p>
-      <p data-testid="connected">{String(connected)}</p>
+      <p data-testid="link">{link}</p>
       <ul data-testid="entries">
         {entries.map((entry) => (
           <li key={entry.id}>{`${entry.kind}/${entry.accountId}/${entry.status}/${entry.detail ?? ''}`}</li>
@@ -49,17 +63,17 @@ function Probe() {
   );
 }
 
-function renderProvider(status: SseStatus = 'open') {
-  const sse = makeServerEvents(status);
+function renderProvider(link: SseLinkState = 'online') {
+  const sse = makeServerEvents(link);
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
 
-  const wrapper = (children: ReactNode, current: SseStatus) => (
+  const wrapper = (children: ReactNode, current: SseLinkState) => (
     <MemoryRouter>
       <QueryClientProvider client={client}>
         <LiveRegionProvider>
-          <ServerEventsContext value={{ ...sse.value, status: current }}>
+          <ServerEventsContext value={sse.valueFor(current)}>
             <ActivityProvider>{children}</ActivityProvider>
           </ServerEventsContext>
         </LiveRegionProvider>
@@ -67,12 +81,12 @@ function renderProvider(status: SseStatus = 'open') {
     </MemoryRouter>
   );
 
-  const view = render(wrapper(<Probe />, status));
+  const view = render(wrapper(<Probe />, link));
   return {
-    ...sse,
+    emit: sse.emit,
     client,
-    /** 模拟连接状态变化：SSE 断了 / 又回来了。 */
-    setStatus: (next: SseStatus) => view.rerender(wrapper(<Probe />, next)),
+    /** 模拟链路状态变化：SSE 断了 / 又回来了。 */
+    setLink: (next: SseLinkState) => view.rerender(wrapper(<Probe />, next)),
   };
 }
 
@@ -101,7 +115,7 @@ afterEach(() => {
 describe('活动中心', () => {
   it('点击立刻产生一条进行中的记录（不等服务端）', async () => {
     const user = userEvent.setup();
-    renderProvider('open');
+    renderProvider('online');
 
     await user.click(screen.getByRole('button', { name: '开始同步' }));
 
@@ -111,7 +125,7 @@ describe('活动中心', () => {
 
   it('SSE 的 sync:done 把它落成成功，并带上服务端给的新邮件数', async () => {
     const user = userEvent.setup();
-    const { emit } = renderProvider('open');
+    const { emit } = renderProvider('online');
 
     await user.click(screen.getByRole('button', { name: '开始同步' }));
     act(() => {
@@ -124,7 +138,7 @@ describe('活动中心', () => {
 
   it('sync:error 落成失败，原因用后端的原话', async () => {
     const user = userEvent.setup();
-    const { emit } = renderProvider('open');
+    const { emit } = renderProvider('online');
 
     await user.click(screen.getByRole('button', { name: '开始同步' }));
     act(() => {
@@ -135,7 +149,7 @@ describe('活动中心', () => {
   });
 
   it('后台自动同步（没人点过）也会出现在活动中心', () => {
-    const { emit } = renderProvider('open');
+    const { emit } = renderProvider('online');
 
     act(() => {
       emit({ type: 'sync:start', accountId: 9 });
@@ -150,7 +164,7 @@ describe('活动中心', () => {
 
   it('没有 SSE 事件的操作（连接测试）由发起方自己落定', async () => {
     const user = userEvent.setup();
-    renderProvider('open');
+    renderProvider('online');
 
     await user.click(screen.getByRole('button', { name: '测试失败' }));
     expect(entryTexts()).toEqual(['test/2/error/端口不通']);
@@ -159,9 +173,9 @@ describe('活动中心', () => {
   it('SSE 断开时：进行中的记录变成「状态未知」而不是永远转圈', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderProvider('reconnecting');
+    renderProvider('offline');
 
-    expect(screen.getByTestId('connected')).toHaveTextContent('false');
+    expect(screen.getByTestId('link')).toHaveTextContent('offline');
     await user.click(screen.getByRole('button', { name: '开始同步' }));
     expect(entryTexts()).toEqual(['sync/1/running/']);
 
@@ -177,7 +191,7 @@ describe('活动中心', () => {
   it('SSE 断开时会退化成轮询账号列表，而不是干等着', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const { client } = renderProvider('reconnecting');
+    const { client } = renderProvider('offline');
     const invalidate = vi.spyOn(client, 'invalidateQueries');
 
     await user.click(screen.getByRole('button', { name: '开始同步' }));
@@ -191,32 +205,77 @@ describe('活动中心', () => {
   it('断线标成未知、恢复后自动清掉，横幅也跟着消失', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const { setStatus } = renderProvider('open');
+    const { setLink } = renderProvider('online');
 
     await user.click(screen.getByRole('button', { name: '开始同步' }));
-    expect(screen.getByTestId('connected')).toHaveTextContent('true');
+    expect(screen.getByTestId('link')).toHaveTextContent('online');
 
-    setStatus('reconnecting');
+    setLink('offline');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ACTIVITY_STALE_AFTER_MS + 6_000);
     });
-    expect(screen.getByTestId('connected')).toHaveTextContent('false');
+    expect(screen.getByTestId('link')).toHaveTextContent('offline');
     expect(entryTexts()).toEqual(['sync/1/stale/']);
 
     // 恢复：重连时已经做过一次全量 invalidate，「状态未知」不该再挂着
-    setStatus('open');
+    setLink('online');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6_000);
     });
-    expect(screen.getByTestId('connected')).toHaveTextContent('true');
+    expect(screen.getByTestId('link')).toHaveTextContent('online');
     expect(entryTexts()).toEqual([]);
     expect(screen.getByTestId('pending')).toHaveTextContent('0');
+  });
+
+  it('流彻底不通、页面上一个进行中都没有时，照样要轮询', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { client } = renderProvider('offline');
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16_000);
+    });
+
+    // 反代把流掐死时不会有任何「进行中」记录，但账号状态和未读数照样在变
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['accounts'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['summary'] });
+  });
+
+  it('宽限期内的重连不触发轮询 —— 一秒的抖动不值得重取全部数据', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { client } = renderProvider('connecting');
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('连接恢复后轮询停下来，不会一直在后台刷', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { client, setLink } = renderProvider('offline');
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16_000);
+    });
+    expect(invalidate).toHaveBeenCalled();
+
+    setLink('online');
+    invalidate.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it('SSE 连着的时候不轮询，也不把进行中的记录标成未知', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const { client } = renderProvider('open');
+    const { client } = renderProvider('online');
     const invalidate = vi.spyOn(client, 'invalidateQueries');
 
     await user.click(screen.getByRole('button', { name: '开始同步' }));

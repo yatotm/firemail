@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { get } from 'node:http';
+import { createServer, connect as connectTcp, type Socket } from 'node:net';
 import { after, test } from 'node:test';
+import type { AddressInfo } from 'node:net';
 import {
   authed,
   cleanupScratch,
@@ -208,3 +211,180 @@ test('已登录会话可以直接连（非浏览器客户端），不必换票',
     assert.equal((await pending).statusCode, 200);
   });
 });
+
+/**
+ * 浏览器的 `EventSource` 设不了请求头，而我们每次重连都新建实例（要换新票），
+ * 原生的 `Last-Event-ID` 头永远不会出现——所以查询参数这条路必须通。
+ */
+test('查询参数里的 lastEventId 会补发断线期间的事件', async () => {
+  await withApp(async (t) => {
+    const session = await login(t, seedUser(t.db));
+    await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const port = (t.app.server.address() as AddressInfo).port;
+
+    const first = await readSse(
+      `http://127.0.0.1:${port}/api/events?ticket=${await ticketFor(t, session)}`,
+    );
+    await until(() => t.ctx.hub.countFor(session.user.id) === 1);
+    assert.ok(
+      first.frames.some((f) => f.length >= 2048),
+      '前导帧要凑够 2 KiB，按字节攒缓冲的中间件才会立刻冲刷',
+    );
+
+    t.ctx.hub.publish(session.user.id, { type: 'sync:start', accountId: 1 });
+    await until(() => first.frames.some((f) => f.includes('event: sync:start')));
+    const cursor = idsIn(first.frames.join('')).at(-1);
+    assert.ok(cursor !== undefined);
+
+    first.destroy();
+    await until(() => t.ctx.hub.countFor(session.user.id) === 0);
+    t.ctx.hub.publish(session.user.id, { type: 'sync:done', accountId: 1, newMessages: 7 });
+
+    const second = await readSse(
+      `http://127.0.0.1:${port}/api/events?ticket=${await ticketFor(t, session)}` +
+        `&lastEventId=${cursor}`,
+    );
+    await until(() => second.frames.some((f) => f.includes('event: sync:done')));
+    assert.match(second.frames.join(''), /"newMessages":7/);
+
+    second.destroy();
+    t.ctx.hub.closeAll();
+  });
+});
+
+/**
+ * 敌意反代：一条 TCP 中继把流硬关掉（destroy，没有 FIN 也没有告别帧），
+ * 正是生产链路（公网 VPS → 隧道 → 软路由 nginx → 本机）在日志里留下的形状。
+ *
+ * 要钉住的不是「能重连」——那早就有了——而是**终态事件不会丢**：
+ * `sync:done` 在断线窗口里被推送出去，重连时必须靠 `Last-Event-ID` 补回来，
+ * 否则活动中心那条记录会永远转圈。
+ */
+test('反代硬关流：带 Last-Event-ID 重连，断线期间的 sync:done 一条不丢', async () => {
+  await withApp(async (t) => {
+    const session = await login(t, seedUser(t.db));
+    await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const origin = (t.app.server.address() as AddressInfo).port;
+    const relay = await hostileRelay(origin);
+
+    try {
+      const first = await readSse(
+        `http://127.0.0.1:${relay.port}/api/events?ticket=${await ticketFor(t, session)}`,
+      );
+      await until(() => t.ctx.hub.countFor(session.user.id) === 1);
+
+      t.ctx.hub.publish(session.user.id, { type: 'sync:start', accountId: 1 });
+      await until(() => first.frames.some((f) => f.includes('event: sync:start')));
+      const cursor = idsIn(first.frames.join('')).at(-1);
+      assert.ok(cursor !== undefined, '业务帧必须带 id，否则没有续传的依据');
+
+      // 中继毫无征兆地把两端都掐掉
+      relay.cut();
+      await until(() => t.ctx.hub.countFor(session.user.id) === 0);
+
+      // 断线窗口：终态事件在这里发出，当时没有任何连接能收到它
+      t.ctx.hub.publish(session.user.id, { type: 'sync:done', accountId: 1, newMessages: 3 });
+
+      const second = await readSse(
+        `http://127.0.0.1:${relay.port}/api/events?ticket=${await ticketFor(t, session)}`,
+        { 'last-event-id': String(cursor) },
+      );
+      await until(() => second.frames.some((f) => f.includes('event: sync:done')));
+
+      const replayed = second.frames.find((f) => f.includes('event: sync:done')) ?? '';
+      assert.match(replayed, /"newMessages":3/, '补发的必须是原来那条事件');
+      assert.ok(
+        !second.frames.some((f) => f.includes('event: sync:start')),
+        '游标之前的事件不该重复投递',
+      );
+
+      first.destroy();
+      second.destroy();
+    } finally {
+      await relay.close();
+      t.ctx.hub.closeAll();
+    }
+  });
+});
+
+/** 从原始流里挑出所有 `id:` 行的值。 */
+function idsIn(body: string): number[] {
+  return [...body.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]));
+}
+
+async function until(check: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('等待条件超时');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+interface SseReader {
+  frames: string[];
+  destroy(): void;
+}
+
+/** 最小的 SSE 读端：按空行切帧，不解析语义。 */
+function readSse(url: string, headers: Record<string, string> = {}): Promise<SseReader> {
+  return new Promise((resolve, reject) => {
+    const request = get(url, { headers }, (response) => {
+      const frames: string[] = [];
+      let buffer = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        buffer += chunk;
+        let index = buffer.indexOf('\n\n');
+        while (index !== -1) {
+          frames.push(buffer.slice(0, index + 2));
+          buffer = buffer.slice(index + 2);
+          index = buffer.indexOf('\n\n');
+        }
+      });
+      response.on('error', () => undefined);
+      resolve({ frames, destroy: () => request.destroy() });
+    });
+    request.on('error', reject);
+  });
+}
+
+interface HostileRelay {
+  port: number;
+  /** 把当前所有转发中的连接硬关掉：destroy，不发告别帧。 */
+  cut(): void;
+  close(): Promise<void>;
+}
+
+async function hostileRelay(upstreamPort: number): Promise<HostileRelay> {
+  const live = new Set<Socket>();
+  const server = createServer((client) => {
+    const upstream = connectTcp(upstreamPort, '127.0.0.1');
+    live.add(client);
+    live.add(upstream);
+    client.pipe(upstream);
+    upstream.pipe(client);
+    const drop = () => {
+      live.delete(client);
+      live.delete(upstream);
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on('error', drop);
+    upstream.on('error', drop);
+    client.on('close', drop);
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    cut: () => {
+      for (const socket of [...live]) socket.destroy();
+      live.clear();
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of [...live]) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}

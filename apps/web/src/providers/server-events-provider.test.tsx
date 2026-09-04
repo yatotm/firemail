@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useServerEvents } from '@/hooks/use-server-events';
+import { LINK_OFFLINE_AFTER_MS } from '@/lib/sse';
 import { ServerEventsProvider } from '@/providers/server-events-provider';
 
 /**
@@ -72,12 +73,14 @@ function mockTicketEndpoint() {
 
 /** 靠一个自己的 state 触发与 SSE 无关的重渲染。 */
 function Probe() {
-  const { status } = useServerEvents();
+  const { status, link, diagnostics } = useServerEvents();
   const [count, setCount] = useState(0);
 
   return (
     <div>
       <p data-testid="status">{status}</p>
+      <p data-testid="link">{link}</p>
+      <p data-testid="drops">{diagnostics.drops}</p>
       <p data-testid="count">{count}</p>
       <button type="button" onClick={() => setCount((n) => n + 1)}>
         重渲染
@@ -186,5 +189,126 @@ describe('ServerEventsProvider', () => {
     view.unmount();
 
     expect(FakeEventSource.instances[0]?.closed).toBe(true);
+  });
+});
+
+/**
+ * 链路状态的宽限期。
+ *
+ * 这是「一打开页面就看见『实时连接已断开』」那个 bug 的落点：
+ * `status` 在建连期间是 `connecting`，绝不能被界面读成「断开」。
+ */
+describe('链路状态', () => {
+  it('首次建连期间是 connecting，不是 offline', async () => {
+    renderProvider();
+    await settle();
+
+    expect(screen.getByTestId('status')).toHaveTextContent('connecting');
+    expect(screen.getByTestId('link')).toHaveTextContent('connecting');
+  });
+
+  it('连上之后是 online', async () => {
+    renderProvider();
+    await settle();
+    act(() => FakeEventSource.instances[0]?.open());
+
+    expect(screen.getByTestId('link')).toHaveTextContent('online');
+  });
+
+  it('断开的头几秒仍是 connecting，满 5 秒才变 offline', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderProvider();
+    await settle();
+    act(() => FakeEventSource.instances[0]?.open());
+
+    act(() => FakeEventSource.instances[0]?.fail());
+    expect(screen.getByTestId('status')).toHaveTextContent('reconnecting');
+    expect(screen.getByTestId('link')).toHaveTextContent('connecting');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LINK_OFFLINE_AFTER_MS);
+    });
+    expect(screen.getByTestId('link')).toHaveTextContent('offline');
+  });
+
+  it('恢复之后 offline 立刻收回', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderProvider();
+    await settle();
+    act(() => FakeEventSource.instances[0]?.open());
+    act(() => FakeEventSource.instances[0]?.fail());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LINK_OFFLINE_AFTER_MS + 1000);
+    });
+    expect(screen.getByTestId('link')).toHaveTextContent('offline');
+
+    act(() => FakeEventSource.instances.at(-1)?.open());
+    expect(screen.getByTestId('link')).toHaveTextContent('online');
+    expect(screen.getByTestId('drops')).toHaveTextContent('1');
+  });
+});
+
+describe('回到前台立刻重试', () => {
+  it('window focus 时跳过剩余退避，马上换票重连', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderProvider();
+    await settle();
+    act(() => FakeEventSource.instances[0]?.open());
+
+    // 连上就被秒断：退避会一路涨上去，人回到窗口时不该干等
+    for (let i = 0; i < 4; i += 1) {
+      act(() => FakeEventSource.instances.at(-1)?.fail());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(40_000);
+      });
+      act(() => FakeEventSource.instances.at(-1)?.open());
+    }
+    const before = FakeEventSource.instances.length;
+
+    act(() => FakeEventSource.instances.at(-1)?.fail());
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(FakeEventSource.instances.length).toBe(before + 1);
+    expect(issued).toBe(FakeEventSource.instances.length);
+  });
+
+  it('已经连着的时候 focus 不会平白多开一条连接', async () => {
+    renderProvider();
+    await settle();
+    act(() => FakeEventSource.instances[0]?.open());
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve();
+    });
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+});
+
+describe('断点续传', () => {
+  it('重连时把上一次收到的事件 id 带回服务端', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderProvider();
+    await settle();
+    const source = FakeEventSource.instances[0];
+    act(() => source?.open());
+    act(() => {
+      source?.listeners.get('sync:start')?.({
+        data: JSON.stringify({ type: 'sync:start', accountId: 4 }),
+        lastEventId: '77',
+      } as MessageEvent<string>);
+    });
+
+    act(() => source?.fail());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(FakeEventSource.instances[1]?.url).toContain('lastEventId=77');
   });
 });

@@ -63,7 +63,6 @@ let timeline: string[] = [];
 const activity: ActivityContextValue = {
   entries: [],
   pending: 0,
-  connected: true,
   begin: (kind, accountId) => timeline.push(`begin:${kind}:${String(accountId)}`),
   settle: (kind, accountId, status, detail) =>
     timeline.push(`settle:${kind}:${String(accountId)}:${status}:${detail ?? ''}`),
