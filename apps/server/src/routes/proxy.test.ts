@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { after, test } from 'node:test';
+import { pino } from 'pino';
+import { buildApp } from '../http/app.ts';
 import {
   authed,
   cleanupScratch,
@@ -176,6 +178,64 @@ test('未登录不能用代理', async () => {
     });
     assert.equal(response.statusCode, 401);
   } finally {
+    await f.t.close();
+  }
+});
+
+test('目标是域名时也要抓得回来（生产上每张远程图片都 502 的那条路径）', async () => {
+  // 上面的用例全打 `http://127.0.0.1:port`，而 net.connect 对 IP 字面量根本不调
+  // 自定义 lookup，于是钉地址那段代码从来没被真的执行过。真实邮件里的图片全是域名。
+  const base = await startServer(() => ({ status: 200, type: 'image/png' }));
+  const port = new URL(base).port;
+  const f = await fixture({
+    allowAddress: () => true,
+    allowAnyPort: true,
+    timeoutMs: 3000,
+    resolve: async () => ['127.0.0.1'],
+  });
+  try {
+    const response = await f.fetch(`http://cdn.example.test:${port}/a.png`);
+    assert.equal(response.statusCode, 200, response.body.slice(0, 200));
+    assert.equal(response.headers['content-type'], 'image/png');
+    assert.equal(response.rawPayload.equals(PNG), true);
+  } finally {
+    await f.t.close();
+  }
+});
+
+test('抓取失败必定留下一条带 kind 的日志，400 那一类也不例外', async () => {
+  // 全局错误处理器把 4xx 记成 debug，生产是 info 级别 —— 没有这条 warn，
+  // 「图片加载不出来」在日志里就是一片空白
+  const base = await startServer(() => ({
+    status: 200,
+    type: 'text/html',
+    body: Buffer.from('<h1>不是图片</h1>'),
+  }));
+  const f = await fixture({ allowAddress: () => true, allowAnyPort: true, timeoutMs: 3000 });
+
+  const lines: Record<string, unknown>[] = [];
+  const logged = await buildApp({
+    ctx: f.t.ctx,
+    loggerInstance: pino({ level: 'warn' }, { write: (line: string) => void lines.push(JSON.parse(line)) }),
+  });
+
+  try {
+    const url = `${base}/a.png`;
+    const response = await logged.inject({
+      method: 'GET',
+      url: `/api/proxy/image?u=${encodeURIComponent(url)}&s=${encodeURIComponent(f.t.ctx.imageProxy.sign(url))}`,
+      headers: { cookie: f.session.cookie, origin: 'http://localhost' },
+    });
+    assert.equal(response.statusCode, 400);
+
+    const warn = lines.find((line) => line['msg'] === '图片代理抓取失败');
+    assert.ok(warn, `没有记下失败原因，日志只有 ${JSON.stringify(lines)}`);
+    assert.equal(warn['level'], 40);
+    assert.equal(warn['kind'], 'content_type');
+    assert.equal(warn['host'], new URL(url).host);
+    assert.match(String(warn['reason']), /不是图片/);
+  } finally {
+    await logged.close();
     await f.t.close();
   }
 });

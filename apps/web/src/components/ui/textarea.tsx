@@ -17,7 +17,7 @@ function Textarea({
       className={cn(
         "w-full min-w-0 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
         variant === "default"
-          ? "field-shell focus-ring min-h-16 px-3 py-2"
+          ? "field-shell min-h-16 px-3 py-2"
           : "resize-none bg-transparent outline-none",
         className
       )}

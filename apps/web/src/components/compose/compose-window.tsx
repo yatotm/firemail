@@ -355,7 +355,7 @@ function ComposeForm({
         </div>
       ) : null}
 
-      <div className="focus-ring-within-inset flex items-center gap-2 border-b px-3 py-1.5">
+      <div className="field-underline flex items-center gap-2 px-3 py-1.5">
         <label htmlFor="compose-subject" className="w-12 shrink-0 text-2xs text-muted-foreground">
           主题
         </label>

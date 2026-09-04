@@ -123,7 +123,7 @@ export function ListToolbar({
       </div>
 
       <div className="px-3 pb-2">
-        <div className="focus-ring-within flex h-9 items-center gap-2 rounded-sm border border-input px-2">
+        <div className="field-shell flex h-9 items-center gap-2 px-2">
           <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <Input
             variant="bare"

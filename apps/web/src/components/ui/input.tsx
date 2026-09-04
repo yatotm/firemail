@@ -22,7 +22,7 @@ function Input({
       className={cn(
         "w-full min-w-0 text-base placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
         variant === "default"
-          ? "field-shell focus-ring h-9 px-3 py-1"
+          ? "field-shell h-9 px-3 py-1"
           : "bg-transparent outline-none",
         className
       )}

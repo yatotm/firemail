@@ -41,7 +41,7 @@ describe('焦点环只有一处定义', () => {
   it('globals.css 里定义了焦点环的宽度与偏移令牌', () => {
     const css = readFileSync(join(SRC, 'styles', 'globals.css'), 'utf8');
     expect(css).toContain('--fm-focus-width: 1px');
-    expect(css).toContain('--fm-focus-offset: 2px');
+    expect(css).toContain('--fm-focus-offset: 0px');
     for (const utility of ['focus-ring', 'focus-ring-inset', 'focus-ring-within', 'field-shell']) {
       expect(css).toContain(`@utility ${utility}`);
     }

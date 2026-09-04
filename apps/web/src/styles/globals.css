@@ -128,13 +128,18 @@
   --fm-row-height: 4rem;
 
   /* ── 焦点与控件外观：全应用唯一定义处 ──────────────────────────
-   * 宽度 1px：shadcn 默认 3px、设计稿写的 2px，实机看都偏粗。收到 1px 后靠
-   * offset 留出的空隙保证可辨识度，而不是靠加粗。WCAG 1.4.11 只要求 ≥3:1 的
-   * 对比度，没有规定线宽，--ring 已满足，所以变细不影响达标。
-   * 组件一律用 focus-ring / focus-ring-inset / focus-ring-within 三个 utility，
-   * 不许再出现 ring-[3px] 之类的字面量（由 src/styles/focus-tokens.test.ts 守着）。 */
+   * 两条规则，按控件有没有自己的可见边框分：
+   *   1. 有边框的（Input / Select / Textarea / 搜索框）——聚焦时把那圈边染成
+   *      强调色，**不画环**。见 field-shell / field-underline。
+   *   2. 没边框的（按钮、链接、列表行、勾选框）——画环，且紧贴边缘。
+   * 宽度 1px：shadcn 默认 3px、设计稿写的 2px，实机看都偏粗。WCAG 1.4.11 只要求
+   * ≥3:1 对比度，不规定线宽，--ring 已满足，所以变细不影响达标。
+   * offset 为 0：留空隙会让环看起来是「悬在外面的第二圈边框」，元素自己有边框时
+   * 尤其明显（灰边 → 缝 → 强调色边）。紧贴边缘更干净，与 GitHub / macOS 一致。
+   * 组件一律用 focus-ring / focus-ring-inset / focus-ring-within / field-shell，
+   * 不许出现 ring-[3px] 之类的字面量（由 src/styles/focus-tokens.test.ts 守着）。 */
   --fm-focus-width: 1px;
-  --fm-focus-offset: 2px;
+  --fm-focus-offset: 0px;
   /* 控件边界用 --input（≥3:1，WCAG 1.4.11），不是装饰性的 --border */
   --fm-control-border: var(--input);
   --fm-control-radius: var(--radius-sm); /* 6px：Input / Select / Textarea（tokens.md §6） */
@@ -404,7 +409,7 @@ html[data-density="comfortable"] {
 @utility focus-ring-inset {
   &:focus-visible {
     outline: var(--fm-focus-width) solid var(--ring);
-    outline-offset: calc(-1 * var(--fm-focus-offset));
+    outline-offset: calc(-1 * var(--fm-focus-width));
   }
 }
 
@@ -420,7 +425,7 @@ html[data-density="comfortable"] {
 @utility focus-ring-within-inset {
   &:focus-within {
     outline: var(--fm-focus-width) solid var(--ring);
-    outline-offset: calc(-1 * var(--fm-focus-offset));
+    outline-offset: calc(-1 * var(--fm-focus-width));
   }
 }
 
@@ -437,6 +442,21 @@ html[data-density="comfortable"] {
   transition-duration: 100ms;
   transition-timing-function: var(--ease-standard);
 
+  /*
+   * 聚焦时**把控件自己那圈边染成强调色**，不再往外画环。
+   * 输入类控件本来就有可见边框，外面隔着 outline-offset 再画一圈，看起来是
+   * 「双层边框中间夹一条缝」——Linear / Vercel / Stripe / GitHub 都不这么做。
+   * 带间隙的外环留给按钮、链接、列表行：那些元素没有自己的边框，
+   * 且环不能压住内容，所以才需要偏移。
+   * `:focus-within` 是给复合控件用的（外壳 + 图标 + 裸 input，焦点落在子元素上）。
+   * 文本框在鼠标点击时也应当显示聚焦态，所以这里不限定 :focus-visible。
+   */
+  &:focus-visible,
+  &:focus-within {
+    border-color: var(--ring);
+    outline: none;
+  }
+
   @variant dark {
     background-color: color-mix(in oklab, var(--input) 30%, transparent);
   }
@@ -452,6 +472,28 @@ html[data-density="comfortable"] {
 
   &[aria-invalid='true'] {
     border-color: var(--destructive);
+  }
+
+  /* 非法态优先于聚焦态：出错时边框保持红色，否则用户看不出哪里填错了 */
+  &[aria-invalid='true']:focus-visible,
+  &[aria-invalid='true']:focus-within {
+    border-color: var(--destructive);
+  }
+}
+
+/**
+ * 只有下边框的整宽行（撰写窗的收件人 / 主题行）。同 field-shell 的思路：
+ * 聚焦时染自己那条边，而不是在行内画一圈内描边。
+ */
+@utility field-underline {
+  border-bottom: 1px solid var(--border);
+  transition-property: border-color;
+  transition-duration: 100ms;
+  transition-timing-function: var(--ease-standard);
+
+  &:focus-within {
+    border-bottom-color: var(--ring);
+    outline: none;
   }
 }
 

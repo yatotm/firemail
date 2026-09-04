@@ -72,7 +72,7 @@ export function RecipientInput({
   const hasError = error !== undefined || invalid.length > 0;
 
   return (
-    <div className="focus-ring-within-inset flex items-start gap-2 border-b px-3 py-1.5">
+    <div className="field-underline flex items-start gap-2 px-3 py-1.5">
       <label htmlFor={id} className="mt-1.5 w-12 shrink-0 text-2xs text-muted-foreground">
         {label}
       </label>

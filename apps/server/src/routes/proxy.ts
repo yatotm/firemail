@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { AppContext } from '../http/context.ts';
 import { badRequest, forbidden, parseOrThrow, upstreamError } from '../http/errors.ts';
@@ -35,7 +35,7 @@ export function registerProxyRoutes(app: FastifyInstance, ctx: AppContext): void
         throw forbidden('图片地址签名无效：这个端点只服务本服务自己签发过的 URL');
       }
 
-      const image = await fetchImage(ctx, u);
+      const image = await fetchImage(ctx, u, request.log);
       return reply
         .header('content-type', image.contentType)
         .header('content-length', String(image.body.byteLength))
@@ -49,11 +49,17 @@ export function registerProxyRoutes(app: FastifyInstance, ctx: AppContext): void
   );
 }
 
-async function fetchImage(ctx: AppContext, url: string) {
+async function fetchImage(ctx: AppContext, url: string, log: FastifyBaseLogger) {
   try {
     return await ctx.imageProxy.fetch(url);
   } catch (error) {
     if (!(error instanceof ImageProxyError)) throw error;
+
+    // 每一次失败都必须留下痕迹。全局错误处理器只把 5xx 记成 error，4xx 走 debug——
+    // 生产默认 info 级别，于是 blocked/content_type/too_large 这三类在日志里完全消失，
+    // 用户报「图片加载不出来」时无从查起。kind 也只有这里知道。
+    log.warn({ kind: error.kind, host: hostOf(url), reason: error.message }, '图片代理抓取失败');
+
     // 分类映射：调用方能修的（地址不合法、不是图片）是 400，上游的问题是 502
     switch (error.kind) {
       case 'blocked':
@@ -63,5 +69,14 @@ async function fetchImage(ctx: AppContext, url: string) {
       default:
         throw upstreamError(error.message);
     }
+  }
+}
+
+/** 日志里只留主机名：营销邮件的图片 URL 常带追踪参数，没必要落盘。 */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '(非法 URL)';
   }
 }

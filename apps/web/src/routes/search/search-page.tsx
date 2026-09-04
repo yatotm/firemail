@@ -165,7 +165,7 @@ export function SearchPage() {
             event.preventDefault();
             submit(input);
           }}
-          className="focus-ring-within flex h-10 items-center gap-2 rounded-md border border-input px-3"
+          className="field-shell flex h-10 items-center gap-2 px-3"
         >
           <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <Input

@@ -2,7 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { isIP } from 'node:net';
+import { isIP, type LookupFunction } from 'node:net';
 import type { SecretBox } from '../crypto/secretBox.ts';
 import type { Sqlite } from '../db/client.ts';
 import { INTERNAL_SETTING_PREFIX, getSetting, putSetting } from '../db/settings.ts';
@@ -231,9 +231,7 @@ export class ImageProxy {
             'accept-encoding': 'identity',
           },
           // 校验过的 IP 直接钉死：连接阶段不再查 DNS，rebinding 无从下手
-          lookup: (_hostname, _options, callback) => {
-            (callback as (e: null, a: string, f: number) => void)(null, pinned.address, pinned.family);
-          },
+          lookup: pinnedLookup(pinned),
           servername: isIP(hostname) === 0 ? hostname : undefined,
           timeout: remaining,
         },
@@ -486,6 +484,25 @@ export function v6Bytes(ip: string): Uint8Array | null {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * 把已经校验过的地址钉进 socket，连接阶段不再查 DNS。
+ *
+ * 回调形状由 `options.all` 决定，两种都必须照顾到：
+ *  - `all` 为真（`net.connect` 默认开着 autoSelectFamily，正是这条）：只认
+ *    `[{address, family}]` 数组，给成三段式的话 Node 读到的是
+ *    `addresses[0].address === undefined`，当场抛 `Invalid IP address: undefined`；
+ *  - `all` 为假（显式关掉 autoSelectFamily 或指定了 family）：`(err, address, family)`。
+ */
+export function pinnedLookup(pinned: { address: string; family: 4 | 6 }): LookupFunction {
+  return (_hostname, options, callback) => {
+    if (options.all === true) {
+      callback(null, [{ address: pinned.address, family: pinned.family }]);
+      return;
+    }
+    callback(null, pinned.address, pinned.family);
+  };
+}
 
 async function defaultResolver(hostname: string): Promise<string[]> {
   const records = await dnsLookup(hostname, { all: true, verbatim: true });

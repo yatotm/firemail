@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils"
  *    键盘与屏幕阅读器行为不用自己实现，这正是 accessibility.md 想要的。
  *
  * 外观（边界 / 圆角 / 禁用 / 非法态 / 焦点环）全部来自 globals.css 的
- * `field-shell` + `focus-ring`，与 Input、Textarea 是同一份定义。
+ * `field-shell`（聚焦由它自己的边框变色表达），与 Input、Textarea 是同一份定义。
  */
 function Select({ className, children, ...props }: React.ComponentProps<"select">) {
   return (
@@ -22,7 +22,7 @@ function Select({ className, children, ...props }: React.ComponentProps<"select"
       <select
         data-slot="select"
         className={cn(
-          "field-shell focus-ring h-9 w-full appearance-none bg-transparent py-1 pr-8 pl-3 text-sm disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
+          "field-shell h-9 w-full appearance-none bg-transparent py-1 pr-8 pl-3 text-sm disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
         {...props}

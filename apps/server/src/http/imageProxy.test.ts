@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { after, test } from 'node:test';
-import { ImageProxy, ImageProxyError, isPublicAddress, v6Bytes } from './imageProxy.ts';
+import { ImageProxy, ImageProxyError, isPublicAddress, pinnedLookup, v6Bytes } from './imageProxy.ts';
 
 /**
  * 代理是典型的 SSRF 汇聚点，因此这里的用例分两层：
@@ -327,4 +327,85 @@ test('上游报错时归类为 upstream', async () => {
 test('默认配置下私网地址仍然被拒（放行开关只在用例里开）', async () => {
   const base = await startServer({ '/a.png': {} });
   await rejects(new ImageProxy({ secret: SECRET, timeoutMs: 2000 }), `${base}/a.png`, 'blocked');
+});
+
+// ---------------------------------------------------------------------------
+// 钉地址的 lookup
+//
+// 上面所有传输层用例打的都是 `http://127.0.0.1:port`，而 `net.connect` 遇到 IP
+// 字面量**根本不会调用 lookup**——于是自定义 lookup 的回调形状从来没被验证过，
+// 生产上「每张远程图片都 502」正是从这个缺口漏出去的。这一节两头堵：
+// 直接断言回调形状，再用域名跑一遍真实的 socket 栈。
+// ---------------------------------------------------------------------------
+
+function captureLookup(pinned: Parameters<typeof pinnedLookup>[0], options: object): unknown[] {
+  const captured: unknown[] = [];
+  pinnedLookup(pinned)('cdn.example.com', options, (...args) => captured.push(...args));
+  return captured;
+}
+
+test('all:true 时回调收到的是 {address, family} 数组', () => {
+  // net.connect 默认开着 autoSelectFamily，正是用 {hints:32, all:true} 调进来的；
+  // 给成三段式 Node 会读到 addresses[0].address === undefined，抛 Invalid IP address: undefined
+  assert.deepEqual(captureLookup({ address: '203.0.113.7', family: 4 }, { hints: 32, all: true }), [
+    null,
+    [{ address: '203.0.113.7', family: 4 }],
+  ]);
+  assert.deepEqual(captureLookup({ address: '2606:4700::1111', family: 6 }, { all: true }), [
+    null,
+    [{ address: '2606:4700::1111', family: 6 }],
+  ]);
+});
+
+test('all 不为真时回调是 (err, address, family) 三段式', () => {
+  // 关掉 autoSelectFamily 或显式指定 family 时走这条
+  for (const options of [{ hints: 32 }, { all: false }, { family: 4, hints: 0 }]) {
+    assert.deepEqual(captureLookup({ address: '203.0.113.7', family: 4 }, options), [
+      null,
+      '203.0.113.7',
+      4,
+    ]);
+  }
+  assert.deepEqual(captureLookup({ address: '2606:4700::1111', family: 6 }, {}), [
+    null,
+    '2606:4700::1111',
+    6,
+  ]);
+});
+
+test('域名目标要真的连得上：钉住的地址得能被 net.connect 接受', async () => {
+  const base = await startServer({ '/a.png': {} });
+  const port = new URL(base).port;
+
+  let calls = 0;
+  const proxy = localProxy({
+    resolve: async () => {
+      calls += 1;
+      return ['127.0.0.1'];
+    },
+  });
+
+  // `.test` 是 RFC 2606 保留域，真实 DNS 永远解析不出来：
+  // 能连上就证明 socket 用的确实是我们钉进去的地址，而不是它自己又查了一次
+  const image = await proxy.fetch(`http://pinned.example.test:${port}/a.png`);
+  assert.equal(image.contentType, 'image/png');
+  assert.equal(image.body.equals(PNG), true);
+  assert.equal(calls, 1, 'DNS 只查一次，连接阶段一律用钉住的地址');
+});
+
+test('域名目标的跳转：每一跳都重新解析并重新钉住', async () => {
+  const base = await startServer({ '/hop': { status: 302, headers: { location: '/a.png' } }, '/a.png': {} });
+  const port = new URL(base).port;
+
+  let calls = 0;
+  const proxy = localProxy({
+    resolve: async () => {
+      calls += 1;
+      return ['127.0.0.1'];
+    },
+  });
+
+  const image = await proxy.fetch(`http://pinned.example.test:${port}/hop`);
+  assert.equal(image.body.equals(PNG), true);
+  assert.equal(calls, 2, '两跳两次解析，跳转后的地址不能沿用上一跳的结论');
 });
