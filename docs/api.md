@@ -1,6 +1,7 @@
 # API 参考
 
-本文对着 `apps/server/src/routes/**`（14 个文件）逐条列出，共 **50 个端点**。
+本文对着 `apps/server/src/routes/**`（15 个文件）逐条列出，共 **54 个端点**，
+与 §15 的总表逐条对齐（双向核对过，无遗漏也无多余）。
 请求与响应的形状由 `packages/shared/src/*.ts` 的 zod schema 定义，那里是唯一权威。
 
 所有端点都在 `/api` 前缀下。
@@ -562,6 +563,55 @@ SMTP 交付成功后立刻 APPEND 进「已发送」并落本地库。**APPEND �
 
 ---
 
+## 12.5 凭据查看与导出
+
+| 方法 | 路径 | 认证 | 限流 |
+| --- | --- | --- | --- |
+| POST | `/api/credentials/reveal` | 用户（本人或管理员） | 5 次 / 分钟 |
+| POST | `/api/credentials/export` | 管理员 | 5 次 / 小时 |
+
+两者都返回 `cache-control: no-store` + `pragma: no-cache` + `X-Content-Type-Options: nosniff`，
+且**服务端不记录任何日志**——明文凭据不进日志、不进缓存。用 POST 而非 GET，是为了让值不落进
+URL、浏览器历史与预取，同时强制走 CSRF 的来源校验。
+
+> 账号列表接口**永远只返回 `hasPassword` / `hasOAuthToken` 布尔位**，这一点不变。
+> v1 的 `GET /api/emails` 用 `SELECT *` 把 29 个账号的明文密码和 refresh_token 一次性
+> 塞进列表响应——那才是真正的洞，而不是「用户能查看自己的密码」这件事本身。
+
+### `POST /api/credentials/reveal`
+
+按需解密**单个**账号的密码。
+
+```jsonc
+// 请求
+{ "accountId": 3 }
+// 响应
+{ "accountId": 3, "email": "someone@outlook.com", "password": "……" }
+```
+
+不是自己的账号返回 **404**，且报文与「账号不存在」**逐字节相同**——状态码不能变成账号存在性的探测器。
+
+### `POST /api/credentials/export`
+
+导出全部账号凭据，格式与批量导入完全互通（`邮箱----密码----client_id----refresh_token`），
+可直接重新导入。以**文件下载**交付，不渲染进页面。
+
+```jsonc
+// 请求：必须显式确认，缺失返回 400
+{ "confirm": true }
+```
+
+响应是 `text/plain` 附件，另带两个头：
+
+| 响应头 | 含义 |
+| --- | --- |
+| `x-firemail-export-count` | 实际导出的账号数 |
+| `x-firemail-export-skipped` | 被跳过的账号数 |
+
+`authType: password` 的账号（gmail / qq / imap）没有 `client_id` 与 `refresh_token`，
+四字段格式表达不了，因此**排除并在文件头部逐条说明原因**——不填占位符，填了会让重新导入时
+`hasOAuthToken` 为真，那是谎言。备份功能最糟的失败模式是让人以为备全了。
+
 ## 13. 设置与概览
 
 | 方法 | 路径 | 说明 |
@@ -674,33 +724,37 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));
 | 18 | GET | `/api/accounts` | 用户 |
 | 19 | POST | `/api/accounts` | 用户 |
 | 20 | POST | `/api/accounts/import` | 用户 |
-| 21 | GET | `/api/accounts/:id` | 用户 |
-| 22 | PATCH | `/api/accounts/:id` | 用户 |
-| 23 | DELETE | `/api/accounts/:id` | 用户 |
-| 24 | PUT | `/api/accounts/:id/sync-enabled` | 用户 |
-| 25 | POST | `/api/accounts/:id/sync` | 用户 |
-| 26 | POST | `/api/accounts/:id/test` | 用户 |
-| 27 | POST | `/api/accounts/:id/reauth` | 用户 |
-| 28 | GET | `/api/accounts/:id/reauth` | 用户 |
-| 29 | DELETE | `/api/accounts/:id/reauth` | 用户 |
-| 30 | GET | `/api/folders` | 用户 |
-| 31 | GET | `/api/folders/:id` | 用户 |
-| 32 | GET | `/api/messages` | 用户 |
-| 33 | GET | `/api/messages/:id` | 用户 |
-| 34 | GET | `/api/messages/:id/thread` | 用户 |
-| 35 | PATCH | `/api/messages/:id` | 用户 |
-| 36 | POST | `/api/messages/:id/move` | 用户 |
-| 37 | DELETE | `/api/messages/:id` | 用户 |
-| 38 | POST | `/api/messages/bulk` | 用户 |
-| 39 | POST | `/api/messages/send` | 用户 |
-| 40 | GET | `/api/messages/send/:sendId` | 用户 |
-| 41 | GET | `/api/messages/:id/body.html` | 用户 |
-| 42 | GET | `/api/attachments/:id` | 用户 |
-| 43 | GET | `/api/messages/:id/inline/:attachmentId` | 用户 |
-| 44 | POST | `/api/attachments` | 用户 |
-| 45 | GET | `/api/proxy/image` | 用户 |
-| 46 | GET | `/api/search` | 用户 |
-| 47 | GET | `/api/settings` | 用户 |
-| 48 | PATCH | `/api/settings` | 用户 |
-| 49 | GET | `/api/summary` | 用户 |
-| 50 | GET | `/api/events` | 票据 / 用户 |
+| 21 | POST | `/api/accounts/sync` | 用户 |
+| 22 | GET | `/api/accounts/:id` | 用户 |
+| 23 | PATCH | `/api/accounts/:id` | 用户 |
+| 24 | DELETE | `/api/accounts/:id` | 用户 |
+| 25 | PUT | `/api/accounts/:id/sync-enabled` | 用户 |
+| 26 | POST | `/api/accounts/:id/sync` | 用户 |
+| 27 | POST | `/api/accounts/:id/resume` | 用户 |
+| 28 | POST | `/api/accounts/:id/test` | 用户 |
+| 29 | POST | `/api/accounts/:id/reauth` | 用户 |
+| 30 | GET | `/api/accounts/:id/reauth` | 用户 |
+| 31 | DELETE | `/api/accounts/:id/reauth` | 用户 |
+| 32 | GET | `/api/folders` | 用户 |
+| 33 | GET | `/api/folders/:id` | 用户 |
+| 34 | GET | `/api/messages` | 用户 |
+| 35 | GET | `/api/messages/:id` | 用户 |
+| 36 | GET | `/api/messages/:id/thread` | 用户 |
+| 37 | PATCH | `/api/messages/:id` | 用户 |
+| 38 | POST | `/api/messages/:id/move` | 用户 |
+| 39 | DELETE | `/api/messages/:id` | 用户 |
+| 40 | POST | `/api/messages/bulk` | 用户 |
+| 41 | POST | `/api/messages/send` | 用户 |
+| 42 | GET | `/api/messages/send/:sendId` | 用户 |
+| 43 | GET | `/api/messages/:id/body.html` | 用户 |
+| 44 | GET | `/api/attachments/:id` | 用户 |
+| 45 | GET | `/api/messages/:id/inline/:attachmentId` | 用户 |
+| 46 | POST | `/api/attachments` | 用户 |
+| 47 | GET | `/api/proxy/image` | 用户 |
+| 48 | GET | `/api/search` | 用户 |
+| 49 | GET | `/api/settings` | 用户 |
+| 50 | PATCH | `/api/settings` | 用户 |
+| 51 | GET | `/api/summary` | 用户 |
+| 52 | GET | `/api/events` | 票据 / 用户 |
+| 53 | POST | `/api/credentials/reveal` | 用户（本人或管理员） |
+| 54 | POST | `/api/credentials/export` | 管理员 |
