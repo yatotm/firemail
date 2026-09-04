@@ -22,12 +22,11 @@ docker compose up -d
 docker compose logs -f
 ```
 
-默认把宿主的 `./data` 挂到容器的 `/app/data`，宿主端口 `12381` 映射到容器 `3000`。
-（选 12381 是因为 v1 还占着 12380，两者可以并行跑；v1 下线后可以改回 12380。）
+默认把宿主的 `./data` 挂到容器的 `/app/data`，宿主端口 `12380` 映射到容器 `3000`。
 
-浏览器打开 `http://<服务器地址>:12381`。
+浏览器打开 `http://<服务器地址>:12380`。
 
-> **端口不是 12380 时要注意**：如果你把 v2 放在别的端口或反代后面，
+> **换端口或走反代时要注意**：如果你把 v2 放在别的端口或反向代理后面，
 > 需要保证浏览器地址栏里的 host 和服务端看到的 `Host` 头一致，否则 CSRF 的来源校验会拒绝写请求。
 > 见 §5。
 
@@ -37,7 +36,7 @@ docker compose logs -f
 docker run -d \
   --name firemail-v2 \
   --restart unless-stopped \
-  -p 12381:3000 \
+  -p 12380:3000 \
   -v "$PWD/data:/app/data" \
   -e TZ=Asia/Shanghai \
   -e FIREMAIL_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
@@ -89,7 +88,7 @@ server {
     server_name mail.example.com;
 
     location / {
-        proxy_pass http://127.0.0.1:12381;
+        proxy_pass http://127.0.0.1:12380;
         proxy_http_version 1.1;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
@@ -151,7 +150,7 @@ tar czf "attachments-$(date +%F).tar.gz" data/attachments/
 ## 7. 健康检查与日志
 
 ```bash
-curl -s http://127.0.0.1:12381/api/health
+curl -s http://127.0.0.1:12380/api/health
 # {"ok":true,"data":{"status":"ok","version":"2.0.0","uptimeSeconds":42}}
 ```
 
@@ -214,13 +213,13 @@ docker compose up -d --build
 
 ## 10. 与 v1 并存 / 切换
 
-v1（`backend/` + `frontend/`，Python/Flask + Vue 2）和 v2 用的是**两套完全独立的数据**：
+v1（Python/Flask + Vue 2，代码已从本仓库移除）和 v2 用的是**两套完全独立的数据**：
 
 | | v1 | v2 |
 | --- | --- | --- |
-| 数据库 | `backend/data/huohuo_email.db` | `data/firemail.db` |
+| 数据库 | v1 部署目录下的 `backend/data/huohuo_email.db` | `data/firemail.db` |
 | 容器名 | `firemail` | `firemail-v2` |
-| 宿主端口 | 12380 | 12381 |
+| 宿主端口 | 12380 | 12380（默认相同，并行跑时先改掉其中一个） |
 
-因此可以让两者同时跑，验证完 v2 再停掉 v1。数据搬迁用一次性迁移工具，
+改掉端口后两者可以同时跑，验证完 v2 再停掉 v1。数据搬迁用一次性迁移工具，
 步骤见[从 v1 迁移](./migration-v1-to-v2.md)。

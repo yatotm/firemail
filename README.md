@@ -1,19 +1,20 @@
 <div align="center">
 
-<img src="apps/web/public/icon-192.png" width="88" height="88" alt="FireMail" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/hero-light.png" />
+  <img src="docs/images/hero-light.png" alt="FireMail —— 把几十个邮箱收进一条信流，验证码在列表里就能复制" width="880" />
+</picture>
 
-# FireMail
-
-**自托管的多账号邮件聚合客户端**
-
+**自托管的多账号邮件聚合客户端。**
 把几十个 Outlook / Gmail / QQ / 自建 IMAP 邮箱收进一条信流，一眼看清哪个账号的授权坏了。
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](package.json)
-[![Docker](https://img.shields.io/badge/docker-yatotm1994%2Ffiremail%3A2-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![Docker Hub](https://img.shields.io/badge/docker-yatotm1994%2Ffiremail%3A2-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/yatotm1994/firemail)
 [![Build](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml/badge.svg)](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml)
 
-[快速开始](#快速开始) · [配置](#配置) · [文档](docs/README.md) · [从 v1 迁移](docs/migration-v1-to-v2.md)
+[快速开始](#快速开始) · [截图](#截图) · [配置](#配置) · [文档](docs/README.md) · [从 v1 迁移](docs/migration-v1-to-v2.md)
 
 </div>
 
@@ -35,16 +36,30 @@ FireMail 是一个**只给自己用**的邮件聚合器。它解决的是这样�
 虽然支持多用户和权限分级，但设计重心是单人自托管。
 
 > **v2 是一次彻底重写。** v1 是 Python/Flask + Vue 2 + 独立 WebSocket 进程 + Caddy，
-> 代码仍在 `backend/` 与 `frontend/` 目录里，等切换完成后会删除。
+> 它的代码已经从仓库里移除，只留下一次性的迁移工具。
 > 老用户请看[从 v1 迁移](docs/migration-v1-to-v2.md)。
 
 ## 截图
 
-> 以下是占位图，v2 上线后会换成真实截图。
+> 截图取自一个**填了虚构数据**的演示实例：里面的邮箱地址、人名、邮件内容全是编造的。
 
-| 统一收件箱 | 账号管理 | 全文检索 |
-| --- | --- | --- |
-| [![统一收件箱](docs/images/inbox.png)](docs/images/inbox.png) | [![账号管理](docs/images/accounts.png)](docs/images/accounts.png) | [![全文检索](docs/images/search.png)](docs/images/search.png) |
+| 统一收件箱 · 验证码高亮在列表行里 | 账号健康度 · 坏在哪个账号一眼可见 |
+| --- | --- |
+| [![统一收件箱](docs/images/inbox-light.png)](docs/images/inbox-light.png) | [![账号管理](docs/images/accounts-light.png)](docs/images/accounts-light.png) |
+
+| 验证码智能视图 · 近 7 天、一键复制 | 全文检索 · FTS5，中文可搜子串 |
+| --- | --- |
+| [![验证码视图](docs/images/codes-light.png)](docs/images/codes-light.png) | [![全文检索](docs/images/search-light.png)](docs/images/search-light.png) |
+
+| 撰写 · 回复带线程头与引用 | 邮件正文 · 沙箱 iframe 里的白纸画布 |
+| --- | --- |
+| [![撰写](docs/images/compose-light.png)](docs/images/compose-light.png) | [![正文渲染](docs/images/reading-light.png)](docs/images/reading-light.png) |
+
+深色模式与移动端：
+
+| 深色模式 | 移动端（<768 单栏） |
+| --- | --- |
+| [![深色模式](docs/images/inbox-dark.png)](docs/images/inbox-dark.png) | [![移动端](docs/images/mobile-light.png)](docs/images/mobile-light.png) |
 
 ## 功能
 
@@ -55,6 +70,8 @@ FireMail 是一个**只给自己用**的邮件聚合器。它解决的是这样�
 - 批量导入：`邮箱----密码----客户端ID----RefreshToken` 一行一条
 - 账号健康状态 `active / auth_error / error / disabled` 是一等信息；
   `auth_error` 能自己修（重新授权），`error` 是系统性故障，两者视觉可分
+- 凭据可以按需查看与导出（口令、`client_id`、`refresh_token`），
+  导出走独立端点、响应带 `no-store`，方便迁走或做离线备份
 
 **同步**
 
@@ -107,13 +124,13 @@ docker compose up -d
 docker compose logs -f
 ```
 
-打开 `http://<服务器地址>:12381`。
+打开 `http://<服务器地址>:12380`。
 
 **没有预置账号，也没有默认口令。** 注册第一个用户即成为管理员；
 之后自助注册默认关闭，需要管理员在设置里显式打开。
 
-> 默认端口是 12381 而不是 12380，因为 v1 还占着 12380，两者可以并行跑。
-> v1 下线后可以在 `docker-compose.yml` 里改回来。
+> 宿主端口在 `docker-compose.yml` 里，改成别的都行。
+> 如果 v1 还在这台机器上跑着（它也用 12380），把其中一个换掉再启动。
 
 不想用 compose：
 
@@ -121,7 +138,7 @@ docker compose logs -f
 docker run -d \
   --name firemail-v2 \
   --restart unless-stopped \
-  -p 12381:3000 \
+  -p 12380:3000 \
   -v "$PWD/data:/app/data" \
   -e TZ=Asia/Shanghai \
   -e FIREMAIL_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
@@ -184,9 +201,9 @@ v1 与 v2 的 schema 完全不同，**没有原地升级**。搬迁靠一次性 
 
 ```bash
 # 1. 停掉 v1 并取一个数据库快照（旧应用每 60 秒轮换一次 refresh_token，
-#    对着还在写的库做校验会误报）
+#    对着还在写的库做校验会误报）。路径在 v1 的部署目录里，不在本仓库
 docker stop firemail
-cp backend/data/huohuo_email.db /tmp/huohuo-snapshot.db
+cp /path/to/firemail-v1/backend/data/huohuo_email.db /tmp/huohuo-snapshot.db
 
 # 2. 先空跑一遍，只出报告不落库
 node --experimental-strip-types tools/migrate-legacy/src/cli.ts \
@@ -229,7 +246,7 @@ pnpm monorepo，Node 22，全 TypeScript ESM：
 | `tools/migrate-legacy` | v1 → v2 迁移与校验 CLI |
 
 模块划分、同步引擎、安全边界、数据表的完整说明见 [docs/architecture.md](docs/architecture.md)，
-API 的 50 个端点见 [docs/api.md](docs/api.md)。
+全部 API 端点见 [docs/api.md](docs/api.md)。
 
 ## 开发
 
@@ -260,7 +277,7 @@ Vite 的代理带 `changeOrigin: true`，服务端看到的 `Host` 是 `localhos
 | [部署](docs/deployment.md) | Compose / 单容器、反代、备份、健康检查、升级 |
 | [配置参考](docs/configuration.md) | 全部环境变量的权威列表 |
 | [架构](docs/architecture.md) | 进程模型、同步引擎、安全边界、数据表 |
-| [API 参考](docs/api.md) | 50 个端点、信封、分页、错误码、SSE |
+| [API 参考](docs/api.md) | 端点总表、信封、分页、错误码、SSE |
 | [从 v1 迁移](docs/migration-v1-to-v2.md) | 迁移工具、校验口径、切换与回退 |
 | [开发指南](docs/development.md) | 本地起服务、测试、迁移、目录约定 |
 | [设计规范](docs/design/README.md) | 色板、布局、交互、邮件渲染、无障碍 |
@@ -269,8 +286,8 @@ Vite 的代理带 `changeOrigin: true`，服务端看到的 `Host` 是 `localhos
 
 [Apache License 2.0](LICENSE)。
 
-`backend/` 与 `frontend/` 目录里的 v1 代码来自下方致谢的原项目，同样以 Apache-2.0 分发；
-它们会在 v2 切换完成后从仓库中移除。
+v2 是对下方致谢的原项目的完整重写；原项目同样以 Apache-2.0 分发，
+它的 Python/Vue 代码已经从本仓库移除，只保留了一次性的迁移工具 `tools/migrate-legacy`。
 
 ## 免责声明
 

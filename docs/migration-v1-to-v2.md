@@ -19,7 +19,8 @@ v1（Python/Flask + Vue 2）和 v2（Node/Fastify + React）用的是**两套完
 
 ```bash
 docker stop firemail          # v1 容器
-cp backend/data/huohuo_email.db /tmp/huohuo-snapshot.db
+# 路径在 v1 的部署目录里，不在本仓库
+cp /path/to/firemail-v1/backend/data/huohuo_email.db /tmp/huohuo-snapshot.db
 ```
 
 之后所有操作都对着这个**快照**做。原库不动，回退时它还在。
@@ -153,9 +154,9 @@ v1 和 v2 数据完全隔离，可以并行跑一段时间再决定：
 
 | | v1 | v2 |
 | --- | --- | --- |
-| 数据库 | `backend/data/huohuo_email.db` | `data/firemail.db` |
+| 数据库 | v1 部署目录下的 `backend/data/huohuo_email.db` | `data/firemail.db` |
 | 容器 | `firemail` | `firemail-v2` |
-| 端口 | 12380 | 12381 |
+| 端口 | 12380 | 12380（默认相同，并行跑时先改掉其中一个） |
 
 确认无误后停掉 v1；**先别删**旧库和旧容器，观察一两周再清理。
 

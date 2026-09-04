@@ -18,7 +18,6 @@ firemail/
 ├── tools/
 │   └── migrate-legacy/  v1 → v2 一次性迁移与校验 CLI
 ├── docs/                本文档目录（design/ 是前端设计规范）
-├── backend/  frontend/  v1 遗留代码，待 v2 切换完成后删除
 └── Dockerfile  docker-compose.yml
 ```
 

@@ -89,7 +89,7 @@ cookie 认证下的**非安全方法**（POST/PUT/PATCH/DELETE）会校验 `Orig
 免认证、免限流、**不碰数据库**。
 
 ```bash
-curl -s http://127.0.0.1:12381/api/health
+curl -s http://127.0.0.1:12380/api/health
 ```
 
 ```json
