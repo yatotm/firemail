@@ -7,6 +7,7 @@ import { useVirtualRows } from '@/hooks/mail/use-virtual-rows';
 import { GROUP_HEADER_HEIGHT, ROW_HEIGHT } from '@/lib/mail/density';
 import { extractOtp, type OtpMatch } from '@/lib/mail/otp';
 import { messageRowIndexes, type ListRow } from '@/lib/mail/rows';
+import { headerRowIndexes, stickyHeaderFor } from '@/lib/mail/sticky-header';
 import { formatCount } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -92,6 +93,17 @@ export function MessageList({
   }, [messages]);
 
   const messageIndexes = useMemo(() => messageRowIndexes(rows), [rows]);
+  const headerIndexes = useMemo(() => headerRowIndexes(rows), [rows]);
+
+  /**
+   * 钉在顶部的日期分组头。`position: sticky` 在虚拟滚动里是坏的：
+   * 滚过去的头会被卸载，而且所有行共享一个 transform 容器，
+   * 两个头只会重叠不会互推。这里改成算出来单画一个（sticky-header.ts 有详细理由）。
+   */
+  const sticky = useMemo(
+    () => stickyHeaderFor(rows, virtual.offsets, headerIndexes, virtual.scrollTop, GROUP_HEADER_HEIGHT),
+    [rows, virtual.offsets, headerIndexes, virtual.scrollTop],
+  );
 
   const scrollToMessage = useCallback(
     (id: number) => {
@@ -136,15 +148,39 @@ export function MessageList({
       tabIndex={0}
       className="focus-ring-inset group/list min-h-0 flex-1 overflow-y-auto scroll-pt-6"
     >
+      {/*
+        高度 0 的 sticky 壳子，只为给里面那个绝对定位的头一个「跟着视口走」的锚点，
+        自己不占一行——否则列表顶部会凭空多出 24px。
+        pointer-events-none：它盖在第一行上面，不能把那一行的点击吃掉。
+      */}
+      {sticky ? (
+        <div aria-hidden className="pointer-events-none sticky top-0 z-sticky h-0">
+          <div
+            data-testid="pinned-group-header"
+            style={{ height: GROUP_HEADER_HEIGHT, transform: `translateY(${String(sticky.offset)}px)` }}
+            className="absolute inset-x-0 top-0 flex items-center bg-background/85 px-3 text-2xs font-medium text-muted-foreground backdrop-blur"
+          >
+            {sticky.label}
+          </div>
+        </div>
+      ) : null}
+
       <div style={{ height: virtual.totalSize }} className="relative">
         <div style={{ transform: `translateY(${String(virtual.paddingTop)}px)` }}>
-          {visible.map((row) =>
+          {visible.map((row, offset) =>
             row.kind === 'header' ? (
               <div
                 key={row.key}
                 aria-hidden
-                style={{ height: GROUP_HEADER_HEIGHT }}
-                className="sticky top-0 z-sticky flex items-center bg-background/85 px-3 text-2xs font-medium text-muted-foreground backdrop-blur"
+                style={{
+                  height: GROUP_HEADER_HEIGHT,
+                  // 正被钉在顶部的那一个藏起来：悬浮头就画在它的位置上，
+                  // 两层半透明毛玻璃叠起来会显出一道明显更深的边
+                  ...(virtual.startIndex + offset === sticky?.index
+                    ? { visibility: 'hidden' as const }
+                    : {}),
+                }}
+                className="flex items-center px-3 text-2xs font-medium text-muted-foreground"
               >
                 {row.label}
               </div>
