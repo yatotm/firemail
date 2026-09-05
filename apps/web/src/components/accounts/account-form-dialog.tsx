@@ -21,8 +21,6 @@ import {
   AUTH_TYPE_LABEL,
   emptyForm,
   formFromAccount,
-  isSyncIntervalValid,
-  SYNC_INTERVAL_HINT,
   toCreateRequest,
   toUpdateRequest,
   type AccountFormState,
@@ -307,20 +305,8 @@ export function AccountFormDialog({
             ) : null}
           </div>
 
+          {/* 同步间隔是全局的，在「设置 → 同步」里一处调完管所有账号，这里不再单开一个 */}
           <div className="flex items-end gap-3">
-            <TextField
-              id={FIELD_IDS.syncIntervalSeconds ?? 'account-sync-interval'}
-              label="同步间隔（秒）"
-              type="number"
-              className="w-40"
-              value={form.syncIntervalSeconds}
-              error={
-                isSyncIntervalValid(form.syncIntervalSeconds)
-                  ? errors.syncIntervalSeconds
-                  : `请填 ${SYNC_INTERVAL_HINT}`
-              }
-              onChange={(syncIntervalSeconds) => patch({ syncIntervalSeconds })}
-            />
             <div className="flex h-9 items-center gap-2">
               <Switch
                 checked={form.syncEnabled}

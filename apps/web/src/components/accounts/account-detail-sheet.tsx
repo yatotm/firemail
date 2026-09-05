@@ -1,5 +1,6 @@
 import type { Account } from '@firemail/shared';
 import { useState, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { AccountFormDialog } from '@/components/accounts/account-form-dialog';
 import { ConnectionTestResult } from '@/components/accounts/connection-test-result';
 import { SimpleTabs } from '@/components/accounts/simple-tabs';
@@ -169,7 +170,11 @@ export function AccountDetailSheet({
                         <div>
                           <p className="text-sm font-medium">自动同步</p>
                           <p className="text-xs text-muted-foreground">
-                            每 {account.syncIntervalSeconds} 秒拉取一次新邮件
+                            每 {account.syncIntervalSeconds} 秒拉取一次新邮件（在
+                            <Link to="/settings/sync" className="mx-0.5 text-primary hover:underline">
+                              设置 → 同步
+                            </Link>
+                            里统一调整）
                           </p>
                         </div>
                         <Switch

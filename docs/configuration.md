@@ -41,7 +41,7 @@ FireMail 的配置只有一个来源：**环境变量**。没有配置文件，�
 
 | 层级 | 触发方式 | 并发 | 抢占关系 |
 | --- | --- | --- | --- |
-| **后台基线** background | 定时（按账号的 `syncIntervalSeconds`） | **串行**，一次一个账号，账号之间留 `FIREMAIL_SYNC_GAP_MS` | 被批量同步抢占 |
+| **后台基线** background | 定时（按「设置 → 同步」的全局间隔） | **串行**，一次一个账号，账号之间留 `FIREMAIL_SYNC_GAP_MS` | 被批量同步抢占 |
 | **批量同步** bulk | `POST /api/accounts/sync`（「全部同步」/ 多选） | 并行，上限 `FIREMAIL_SYNC_CONCURRENCY` | 抢占后台基线，批次结束后恢复 |
 | **单账号同步** interactive | `POST /api/accounts/:id/sync` | 并行且插队 | 不抢占，但抢并发名额时排在批量任务前面 |
 
@@ -67,8 +67,13 @@ FireMail 的配置只有一个来源：**环境变量**。没有配置文件，�
 | `FIREMAIL_SSE_MAX_PER_USER` | `6` | 1–64 | 单用户同时保持的 SSE 事件连接数上限。多标签页各占一条。 |
 | `FIREMAIL_SHUTDOWN_TIMEOUT_MS` | `15000` | 1000–120000 | 优雅停机的宽限期（毫秒）。超时强制退出。 |
 
-单账号的同步间隔不是环境变量，而是账号自身的 `syncIntervalSeconds` 字段（60–86400 秒，默认 300），
-在界面或 `PATCH /api/accounts/:id` 里改。
+同步间隔不是环境变量，在**界面的「设置 → 同步」**里改（60–86400 秒，默认 300），
+对应 `PATCH /api/settings` 的 `syncIntervalSeconds`。
+
+它是**全局**的：一个值管这个用户的所有账号，账号上没有单独的间隔可调。
+服务端在改设置时把新值写到该用户的每一行 `accounts.sync_interval_seconds` 上，
+调度器读的仍然是那一列。旧版是「设置里填新账号的默认值 + 每个账号再单独调」，
+两处都能填、两处对不上，而且设置里那个值存下来之后没有任何地方读它——改了完全没效果。
 
 ### 3.1 自动暂停（默认只观察，不执行）
 

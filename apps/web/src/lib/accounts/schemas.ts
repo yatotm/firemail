@@ -26,7 +26,6 @@ export interface CreateAccountPayload {
   provider: AccountProvider;
   authType: AccountAuthType;
   syncEnabled: boolean;
-  syncIntervalSeconds: number;
   imapHost?: string;
   imapPort?: number;
   imapSecure: boolean;

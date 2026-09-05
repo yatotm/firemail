@@ -1,6 +1,5 @@
 import {
   createAccountRequestSchema,
-  SYNC_INTERVAL_DEFAULT_SECONDS,
   SYNC_INTERVAL_MAX_SECONDS,
   SYNC_INTERVAL_MIN_SECONDS,
   updateAccountRequestSchema,
@@ -97,7 +96,6 @@ export interface AccountFormState {
   oauthClientId: string;
   oauthRefreshToken: string;
   syncEnabled: boolean;
-  syncIntervalSeconds: string;
 }
 
 export function authTypeFor(provider: AccountProvider): AccountAuthType {
@@ -121,7 +119,6 @@ export function emptyForm(provider: AccountProvider = 'outlook'): AccountFormSta
     oauthClientId: '',
     oauthRefreshToken: '',
     syncEnabled: true,
-    syncIntervalSeconds: String(SYNC_INTERVAL_DEFAULT_SECONDS),
   };
 }
 
@@ -162,7 +159,6 @@ export function formFromAccount(account: Account): AccountFormState {
     oauthClientId: account.oauthClientId ?? '',
     oauthRefreshToken: '',
     syncEnabled: account.syncEnabled,
-    syncIntervalSeconds: String(account.syncIntervalSeconds),
   };
 }
 
@@ -213,7 +209,6 @@ export function toCreateRequest(form: AccountFormState): FormResult<CreateAccoun
     provider: form.provider,
     authType: form.authType,
     syncEnabled: form.syncEnabled,
-    syncIntervalSeconds: interval(form.syncIntervalSeconds),
     ...connectionFields(form),
     ...(form.authType === 'password' && form.password ? { password: form.password } : {}),
     ...(form.authType === 'oauth2' && form.oauthClientId.trim()
@@ -245,9 +240,6 @@ export function toUpdateRequest(
   if (form.provider !== account.provider) patch.provider = form.provider;
   if (form.authType !== account.authType) patch.authType = form.authType;
   if (form.syncEnabled !== account.syncEnabled) patch.syncEnabled = form.syncEnabled;
-  if (interval(form.syncIntervalSeconds) !== account.syncIntervalSeconds) {
-    patch.syncIntervalSeconds = interval(form.syncIntervalSeconds);
-  }
 
   const connection = connectionFields(form);
   if (connection.imapHost !== (account.imapHost ?? undefined)) patch.imapHost = connection.imapHost;

@@ -94,10 +94,16 @@ export function createContext(options: ContextOptions): AppContext {
 
   const sessions = new SessionService({ db, ttlMs: config.sessionTtlMs, now });
   const users = new UserService({ db, sqlite, sessions, now });
-  const accounts = new AccountService({ db, box, now });
-  const folders = new FolderService({ db });
   const settings = new SettingsStore({ sqlite, now });
   const logs = options.logs ?? new LogStore({ sqlite, now });
+  // 同步间隔是全局的：建号时按该用户此刻的设置落一份，改设置时铺到所有账号
+  const accounts = new AccountService({
+    db,
+    box,
+    now,
+    syncIntervalSeconds: (userId) => settings.get(userId).syncIntervalSeconds,
+  });
+  const folders = new FolderService({ db });
 
   const oauthClient = options.oauthClient ?? new MicrosoftOAuthClient();
   const tokenStore = new OAuthTokenStore({ db, box });

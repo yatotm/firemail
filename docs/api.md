@@ -230,7 +230,6 @@ query：`status`（`active`/`auth_error`/`error`/`disabled`）、
   "oauthClientId": "…",
   "oauthRefreshToken": "…",
   "syncEnabled": true,
-  "syncIntervalSeconds": 300,     // 60–86400
   "signatureHtml": null           // 最长 20000 字符
 }
 ```
@@ -633,7 +632,8 @@ URL、浏览器历史与预取，同时强制走 CSRF 的来源校验。
   "threadView": true,
   "timeFormat": "24h",                    // 24h | 12h
   "defaultAccountId": null,
-  "syncIntervalSeconds": 300              // 新账号的默认同步间隔，60–86400
+  "syncIntervalSeconds": 300              // 同步间隔，60–86400。全局：改它会立刻写到
+                                          // 该用户的每一个账号上，账号上没有单独的间隔可调
 }
 ```
 
