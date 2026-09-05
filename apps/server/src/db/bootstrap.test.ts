@@ -24,7 +24,7 @@ const silent = (): void => {};
 test('首次启动建库、跑迁移并记录密钥指纹', () => {
   const dataDir = scratch();
   const boot = bootstrapDatabase({ dataDir, env: {}, log: silent });
-  assert.deepEqual(boot.migrations.applied, ['0000_init', '0001_fts_messages']);
+  assert.deepEqual(boot.migrations.applied, ['0000_init', '0001_fts_messages', '0002_logs']);
   assert.equal(boot.key.source, 'generated');
   assert.equal(getSetting(boot.sqlite, SETTING_KEYS.encryptionKeyFingerprint), boot.key.fingerprint);
   assert.equal(boot.dbPath, join(dataDir, 'firemail.db'));

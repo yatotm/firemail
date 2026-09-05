@@ -23,6 +23,7 @@ import { AttachmentFetcher } from '../storage/attachmentFetcher.ts';
 import { AttachmentStore } from '../storage/attachmentStore.ts';
 import { SyncScheduler } from '../sync/scheduler.ts';
 import { connectVia, type ImapConnect, type SyncLogger } from '../sync/types.ts';
+import { LogStore } from '../logs/store.ts';
 import { ImageProxy, loadImageProxySecret, type ImageProxyOptions } from './imageProxy.ts';
 import { MessageQuery } from './messageQuery.ts';
 import { SettingsStore } from './settingsStore.ts';
@@ -47,6 +48,8 @@ export interface AppContext {
   search: SearchService;
   summary: SummaryService;
   settings: SettingsStore;
+  /** 服务端运行日志。pino 的第二条流写它，设置里的日志页读它。 */
+  logs: LogStore;
   send: SendService;
 
   providers: ProviderRegistry;
@@ -75,6 +78,12 @@ export interface ContextOptions {
   transport?: TransportFactory;
   /** 图片代理的调参，测试用来注入假 DNS 解析与放行本地地址。 */
   imageProxy?: Omit<ImageProxyOptions, 'secret'>;
+  /**
+   * 日志库。入口进程要**先**建它才能建 logger（pino 的第二条流写它），
+   * 所以这里允许把已经建好的那一个传进来，而不是各建各的、
+   * 让写进去的和读出来的是两个实例。
+   */
+  logs?: LogStore;
   log?: SyncLogger;
   now?: () => number;
 }
@@ -88,6 +97,7 @@ export function createContext(options: ContextOptions): AppContext {
   const accounts = new AccountService({ db, box, now });
   const folders = new FolderService({ db });
   const settings = new SettingsStore({ sqlite, now });
+  const logs = options.logs ?? new LogStore({ sqlite, now });
 
   const oauthClient = options.oauthClient ?? new MicrosoftOAuthClient();
   const tokenStore = new OAuthTokenStore({ db, box });
@@ -185,6 +195,7 @@ export function createContext(options: ContextOptions): AppContext {
     search: new SearchService({ db, sqlite }),
     summary: new SummaryService({ db, now }),
     settings,
+    logs,
     send,
     providers,
     attachments,

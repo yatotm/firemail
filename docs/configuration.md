@@ -113,7 +113,7 @@ FireMail 的配置只有一个来源：**环境变量**。没有配置文件，�
 | --- | --- | --- | --- |
 | `NODE_ENV` | `development` | 任意字符串 | 等于 `production` 时进入生产模式。镜像里已固定为 `production`。 |
 | `TZ` | 跟随系统 | IANA 时区名，如 `Asia/Shanghai` | 影响日志与所有日期格式化。不是合法时区名会启动失败。 |
-| `LOG_LEVEL` | `info` | `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent` | pino 日志级别。 |
+| `LOG_LEVEL` | `info` | `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent` | **控制台**的 pino 日志级别。落库那一路（设置 → 日志）有自己的门槛，在界面上改，两者互不影响。 |
 
 ## 5. 加密主密钥（务必读完）
 

@@ -242,3 +242,30 @@ export const syncRuns = sqliteTable(
   },
   (t) => [index('sync_runs_account_started_idx').on(t.accountId, t.startedAt)],
 );
+
+/**
+ * 服务端运行日志，设置里的日志页读它。
+ *
+ * 存进库而不是滚动文件：日志页要按级别过滤、按子串搜、取日期区间，这三件事在
+ * 文本文件上都得自己实现一遍。控制台那一路不受影响，仍然照常写 stdout。
+ *
+ * `bytes` 是这一行的估算字节数。容量上限不查文件大小（SQLite 的页面占用与行内容
+ * 不是一回事，还得开 dbstat），而是把它累加起来，超了就从最旧的删——
+ * 用户在设置里填的「上限 32MB」于是对应一个可解释的量：日志正文的总字节数。
+ */
+export const logs = sqliteTable(
+  'logs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    at: integer('at').notNull(),
+    /** pino 的数字级别：20 debug / 30 info / 40 warn / 50 error */
+    level: integer('level').notNull(),
+    message: text('message').notNull(),
+    /** pino 那一行里除固定字段之外的东西，JSON */
+    meta: text('meta'),
+    /** 不加外键：账号删掉之后这条日志仍然要读得懂，那正是排查时最需要的东西 */
+    accountId: integer('account_id'),
+    bytes: integer('bytes').notNull(),
+  },
+  (t) => [index('logs_at_idx').on(t.at), index('logs_level_at_idx').on(t.level, t.at)],
+);

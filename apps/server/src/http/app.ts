@@ -14,6 +14,7 @@ import { registerCredentialRoutes } from '../routes/credentials.ts';
 import { registerEventRoutes } from '../routes/events.ts';
 import { registerFolderRoutes } from '../routes/folders.ts';
 import { registerHealthRoutes } from '../routes/health.ts';
+import { registerLogRoutes } from '../routes/logs.ts';
 import { registerMessageRoutes } from '../routes/messages.ts';
 import { registerProxyRoutes } from '../routes/proxy.ts';
 import { registerRenderRoutes } from '../routes/render.ts';
@@ -102,6 +103,7 @@ export async function buildApp({
       registerProxyRoutes(api, ctx);
       registerSearchRoutes(api, ctx);
       registerSettingsRoutes(api, ctx);
+      registerLogRoutes(api, ctx);
       registerSummaryRoutes(api, ctx);
       registerEventRoutes(api, ctx);
     },

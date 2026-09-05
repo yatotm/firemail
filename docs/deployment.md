@@ -179,6 +179,10 @@ docker compose logs firemail | grep '"level":50'   # 只看 error
 docker compose up -d
 ```
 
+不想重建容器的话，**设置 → 日志**（仅管理员）里也能看同一批日志：它是 pino 的第二条
+出口，落在库里，支持按级别过滤、按正文搜索、取日期区间，「详细程度」在界面上就能改，
+不用重启。第一级后台同步的流水只在这里，活动中心不显示它。
+
 > **`.env` 里的变量不会自动进容器。** Compose 的 `.env` 只做**变量替换**，
 > 只有在 `docker-compose.yml` 的 `environment:` 里被显式引用的名字才会传进去。
 > 当前被引用的只有 `TZ` 和 `FIREMAIL_ENCRYPTION_KEY`。

@@ -7,3 +7,4 @@ export * from './message.js';
 export * from './summary.js';
 export * from './settings.js';
 export * from './events.js';
+export * from './logs.js';

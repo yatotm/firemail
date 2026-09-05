@@ -31,4 +31,9 @@ export const endpoints = {
 
   folders: '/folders',
   settings: '/settings',
+
+  /** 服务端运行日志（仅管理员）。第一级后台同步的流水在这里，不在活动中心。 */
+  logs: '/logs',
+  logsStatus: '/logs/status',
+  logsConfig: '/logs/config',
 } as const;

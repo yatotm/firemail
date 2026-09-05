@@ -3,6 +3,7 @@ import { RouteError } from '@/components/common/route-error';
 import { AboutPanel } from '@/components/settings/about-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { ComposePanel } from '@/components/settings/compose-panel';
+import { LogsPanel } from '@/components/settings/logs-panel';
 import { ReadingPanel } from '@/components/settings/reading-panel';
 import { SecurityPanel } from '@/components/settings/security-panel';
 import { SyncPanel } from '@/components/settings/sync-panel';
@@ -67,6 +68,15 @@ export const router = createBrowserRouter([
               { path: 'compose', element: <ComposePanel /> },
               { path: 'sync', element: <SyncPanel /> },
               { path: 'security', element: <SecurityPanel /> },
+              {
+                // 日志里有邮箱地址、上游原文错误与请求路径，只给管理员
+                path: 'logs',
+                element: (
+                  <RequireAdmin>
+                    <LogsPanel />
+                  </RequireAdmin>
+                ),
+              },
               { path: 'about', element: <AboutPanel /> },
             ],
           },
