@@ -55,6 +55,40 @@ export FIREMAIL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 代理目标可以用 `FIREMAIL_API_TARGET` 改（默认 `http://localhost:3000`）。
 全部环境变量见[配置参考](./configuration.md)。
 
+### 开发环境会在本机留下什么
+
+只有两样，都在仓库目录里、都被 `.gitignore` 挡着，删掉即可复原，**不往系统里装任何东西**：
+
+| 位置 | 是什么 | 清理 |
+| --- | --- | --- |
+| `node_modules/`（根 + 各包） | 依赖。内容是指向 pnpm 全局 store 的硬链接，实际占用远小于 `du` 显示的数字 | `rm -rf node_modules apps/*/node_modules packages/*/node_modules` |
+| `apps/server/data/` | 开发用的 SQLite 库、附件、自动生成的密钥 | 直接删目录 |
+| `dist/`、`.vite/`、`*.tsbuildinfo` | 构建产物 | `git clean -Xd -n` 先看，确认后去掉 `-n` |
+
+Node 走 corepack + `packageManager` 字段，**不需要任何 `npm -g` 安装**；
+环境变量用 `export` 只影响当前终端。所以「污染本机」的实际面积就是上面这几个目录。
+
+> **数据目录是相对 cwd 解析的**（`FIREMAIL_DATA_DIR ?? 'data'`）。
+> `pnpm dev` 时服务端的 cwd 是 `apps/server`，所以开发数据落在 `apps/server/data/`，
+> 和部署用的根目录 `data/` 是两份，互不影响。
+> 但如果你在**仓库根目录**手动跑 `node apps/server/dist/index.js`，cwd 就是根目录，
+> 它会直接读写生产库——真要这么跑就显式给上 `FIREMAIL_DATA_DIR`。
+
+### 想要更彻底的隔离
+
+上面那点足够了的话就别加东西。真嫌不够（比如这台机器同时是生产机），两条路：
+
+1. **VS Code / JetBrains 的 Dev Container** —— 本机只装 Docker 和编辑器，
+   依赖和运行时全在容器里，`node_modules` 放容器内的 volume，一个文件都不落本机。
+   代价是每次进出容器有几秒开销，且要多维护一个 `.devcontainer/`。
+2. **只隔离数据** —— 起服务端时给一个临时数据目录，跑完就删：
+
+   ```bash
+   FIREMAIL_DATA_DIR=$(mktemp -d) pnpm --filter @firemail/server dev
+   ```
+
+   这条对「怕碰到生产库」这一类担心最划算：一行命令，不引入任何新工具。
+
 ## 3. 常用命令
 
 | 命令 | 作用 |
@@ -65,6 +99,7 @@ export FIREMAIL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 | `pnpm --filter @firemail/server test` | 只跑服务端测试（`node --test`） |
 | `pnpm --filter @firemail/web test` | 只跑前端测试（vitest + jsdom） |
 | `pnpm --filter @firemail/web lint` | ESLint（含 `jsx-a11y`、`react-hooks`） |
+| `pnpm release <版本号>` | 发版：改版本号、跑全套检查、提交、打 tag（见 §8） |
 
 跑单个服务端测试文件：
 
@@ -134,3 +169,79 @@ apps/server/src/
 - 提交信息用 Conventional Commits（`feat:` / `fix:` / `docs:` / `refactor:` / `chore:`）。
 - PR 前至少跑通 `pnpm typecheck` 与 `pnpm test`。
 - 涉及数据库、密钥、邮件渲染、认证的改动，在 PR 描述里单独说明影响面。
+
+## 8. 发版
+
+版本号按语义化版本走：
+
+| 段位 | 什么时候动 | 例子 |
+| --- | --- | --- |
+| 主版本 `3.0.0` | 破坏性改动：配置项改名、数据要迁移、接口不兼容 | v1 → v2 |
+| 次版本 `2.1.0` | 加了新功能，老用户升级不用做任何事 | 新增设置里的日志页 |
+| 补丁号 `2.0.1` | 只修 bug，用户看不到任何新东西 | 修同步转圈 |
+
+版本号写在 **6 个地方**（5 个 `package.json` + `apps/server/src/routes/health.ts` 的
+`VERSION`，后者是 `/api/health` 返回的那个）。不做成「一处定义、其余引用」是因为
+服务端那份要在编译产物里可用、而 workspace 各包本来就得各写各的；
+代价用 `apps/server/src/version.test.ts` 兜住——漏改一处 CI 就红。
+
+### 步骤
+
+```bash
+git checkout master && git pull
+pnpm release 2.1.0
+```
+
+脚本会：校验工作区干净、在 master 上、tag 没被用过、版本号只往前走 →
+跑 typecheck / lint / test / build → 改完 6 处版本号 → 提交 `chore(release): v2.1.0`
+→ 打 annotated tag `v2.1.0`。
+
+**它不推送。** 推 tag 是唯一不可撤销的一步（正式版本号一旦发出去就不该被重写），
+留给人确认。脚本最后会把这两条命令原样打出来：
+
+```bash
+git push origin master
+git push origin v2.1.0
+```
+
+推 tag 之后 Actions 自动做两件事，第二件 `needs` 第一件（Release 一出现就意味着镜像已经在了）：
+
+1. 构建多架构镜像并推 Docker Hub：`2.1.0` / `2.1` / `2` / `latest`
+2. 建 GitHub Release，发布说明从上一个 tag 到这个 tag 的提交自动生成
+
+### 生产环境升级
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+`docker-compose.yml` 里锁的是 `yatotm1994/firemail:2`，跟着 2.x 的所有更新走；
+想钉死在某一版就把它改成 `:2.1.0`。想跑 master 上还没发版的代码用 `:edge`。
+
+### Docker 在这条链路里的位置
+
+**日常开发完全不碰 Docker。** 改代码用 `pnpm dev`（见 §2），秒级生效；
+构建一次镜像要两三分钟，拿它当开发循环是不可行的。
+
+**CI 打镜像不看 `docker-compose.yml`。** 它的输入只有 `Dockerfile` 和仓库根目录
+（`docker/build-push-action` 的 `context: .`）。compose 文件里写什么都不影响
+发布出去的镜像——那个文件只服务于「在某台机器上把这个应用跑起来」。
+
+于是整条链路是：
+
+```
+改代码 → pnpm dev 看效果 → pnpm test → 推分支 → PR → CI → 合并 master
+                                                                 ↓
+                                          pnpm release 2.1.0 → 推 tag
+                                                                 ↓
+                              Actions 用 Dockerfile 打镜像 → Docker Hub
+                                                                 ↓
+                                    服务器 docker compose pull && up -d
+```
+
+### 一个坑
+
+仓库里还留着一个 v1 时代的本地 tag `v0.0.1`。**不要用 `git push --tags` 或
+`--follow-tags`**——它会把这个 tag 一起推上去，Actions 会当成正式发版，
+往 Docker Hub 推 `0` / `0.0` / `0.0.1` / **`latest`**，而 `latest` 会因此指向 v1 的代码。
+推 tag 一律写全名：`git push origin v2.1.0`。

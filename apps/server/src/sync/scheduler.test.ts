@@ -39,13 +39,12 @@ function harness(): Harness {
 }
 
 /** 账号间隔与退避在单测里一律清零：这些用例验证的是排期与惩罚，不是真实等待。 */
-function scheduler(h: Harness, runner: SyncRunner, jitterRatio = 0) {
+function scheduler(h: Harness, runner: SyncRunner) {
   return new SyncScheduler(
     { db: h.deps.db, runner },
     {
       now: () => h.clock.now,
       random: () => 0.5,
-      jitterRatio,
       log: NOOP_LOGGER,
       gapMs: 0,
       resumeDelayMs: 0,
@@ -116,26 +115,118 @@ test('低于下限的间隔被抬到 60 秒', async () => {
   h.close();
 });
 
-test('抖动让 29 个同周期账号错开，而不是齐步走', async () => {
+/**
+ * 第一级基线的排期。产品要求是「设置里的间隔值 = 每个邮箱的绝对间隔」，
+ * 于是这里三条必须同时成立：周期精确、账号之间错开、错开之后不再漂。
+ */
+
+test('间隔就是配置值本身，不再叠随机抖动', async () => {
   const h = harness();
   const ids = Array.from({ length: 29 }, (_, i) =>
     seedAccount(h.deps.db, { email: `a${i}@x.com`, syncIntervalSeconds: 300 }).id,
   );
   const runner = new SyncRunner(h.deps, { concurrency: 4 });
-  let seed = 0;
-  const sched = new SyncScheduler(
-    { db: h.deps.db, runner },
-    { now: () => h.clock.now, random: () => ((seed = (seed * 9301 + 49297) % 233280) / 233280), log: NOOP_LOGGER },
-  );
+  const sched = scheduler(h, runner);
 
   await sched.tick();
 
-  const dues = new Set(ids.map((id) => sched.dueAt(id)));
-  assert.ok(dues.size > 20, `29 个账号应散开到多个时刻，实际只有 ${dues.size} 个`);
-  for (const due of dues) {
-    const offset = (due as number) - h.clock.now;
-    assert.ok(offset >= 240_000 && offset <= 360_000, `抖动应落在 ±20% 内，实际 ${offset}`);
+  // 时钟冻结、账号间隔为 0，于是所有账号都在同一刻完成——到期时间必须一律是整 300 秒。
+  // 以前这里是 240~360 秒的随机值，用户在设置里写的数字和实际行为对不上。
+  for (const id of ids) {
+    assert.equal(sched.dueAt(id), h.clock.now + 300_000, `账号 ${id} 的间隔应精确等于 300 秒`);
   }
+  h.close();
+});
+
+test('串行那一圈就是相位发生器：一次导入的账号被完成时刻天然摊开', async () => {
+  const h = harness();
+  // 每次建连推进 6 秒，模拟一次真实同步的耗时
+  const deps = {
+    ...h.deps,
+    connect: (account: Parameters<typeof h.deps.connect>[0]) => {
+      h.clock.now += 6_000;
+      return h.deps.connect(account);
+    },
+  };
+  const ids = Array.from({ length: 4 }, (_, i) =>
+    seedAccount(deps.db, { email: `b${i}@x.com`, syncIntervalSeconds: 300 }).id,
+  );
+  const sched = scheduler({ ...h, deps }, new SyncRunner(deps, { concurrency: 1 }));
+
+  await sched.tick();
+
+  const dues = ids.map((id) => sched.dueAt(id) as number);
+  assert.equal(new Set(dues).size, 4, '4 个账号应落在 4 个不同的时刻');
+  for (let i = 1; i < dues.length; i++) {
+    assert.equal(
+      (dues[i] as number) - (dues[i - 1] as number),
+      6_000,
+      '相邻两个账号的到期时刻应正好差一次同步的耗时',
+    );
+  }
+  h.close();
+});
+
+test('稳态锚在上一次到期，同步耗时不会把周期一点点撑大', async () => {
+  const h = harness();
+  const due = h.clock.now;
+  // 已经同步过的账号：到期时刻是 last + 300 秒，也就是此刻
+  const account = seedAccount(h.deps.db, {
+    syncIntervalSeconds: 300,
+    lastSyncedAt: due - 300_000,
+  });
+  const deps = {
+    ...h.deps,
+    connect: (row: Parameters<typeof h.deps.connect>[0]) => {
+      h.clock.now += 8_000;
+      return h.deps.connect(row);
+    },
+  };
+  const sched = scheduler({ ...h, deps }, new SyncRunner(deps, { concurrency: 1 }));
+
+  await sched.tick();
+
+  // 同步花了 8 秒，但下一次仍然是「上次到期 + 300 秒」，不是「完成时刻 + 300 秒」。
+  // 每轮多算 8 秒的话，29 个账号的相位几个小时就重新糊成一坨。
+  assert.equal(sched.dueAt(account.id), due + 300_000);
+  h.close();
+});
+
+test('落后超过一整个间隔就地重起相位，不会被每个 tick 反复判成到期', async () => {
+  const h = harness();
+  const account = seedAccount(h.deps.db, {
+    syncIntervalSeconds: 300,
+    // 停机很久：按 last + 间隔 算出来的到期时刻已经在 10 分钟以前
+    lastSyncedAt: h.clock.now - 900_000,
+  });
+  const runner = new SyncRunner(h.deps, { concurrency: 1 });
+  const sched = scheduler(h, runner);
+
+  await sched.tick();
+
+  assert.equal(sched.dueAt(account.id), h.clock.now + 300_000);
+  h.close();
+});
+
+test('用户点的同步锚在这一刻，基线不会紧接着再来一遍', async () => {
+  const h = harness();
+  const due = h.clock.now + 200_000;
+  const account = seedAccount(h.deps.db, {
+    syncIntervalSeconds: 300,
+    lastSyncedAt: h.clock.now - 100_000,
+  });
+  const runner = new SyncRunner(h.deps, { concurrency: 1 });
+  const sched = scheduler(h, runner);
+
+  assert.equal(sched.dueAt(account.id), undefined, '还没排过期');
+  await sched.tick(); // 还没到期，只是把 dueAt 算出来
+  assert.equal(sched.dueAt(account.id), due);
+
+  h.clock.now += 10_000;
+  await sched.syncNow(account.id);
+
+  // 他刚拿到新数据，下一次基线从这一刻重新算，而不是回到原来的网格点
+  assert.equal(sched.dueAt(account.id), h.clock.now + 300_000);
   h.close();
 });
 

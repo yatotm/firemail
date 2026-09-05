@@ -230,7 +230,6 @@ query：`status`（`active`/`auth_error`/`error`/`disabled`）、
   "oauthClientId": "…",
   "oauthRefreshToken": "…",
   "syncEnabled": true,
-  "syncIntervalSeconds": 300,     // 60–86400
   "signatureHtml": null           // 最长 20000 字符
 }
 ```
@@ -633,7 +632,8 @@ URL、浏览器历史与预取，同时强制走 CSRF 的来源校验。
   "threadView": true,
   "timeFormat": "24h",                    // 24h | 12h
   "defaultAccountId": null,
-  "syncIntervalSeconds": 300              // 新账号的默认同步间隔，60–86400
+  "syncIntervalSeconds": 300              // 同步间隔，60–86400。全局：改它会立刻写到
+                                          // 该用户的每一个账号上，账号上没有单独的间隔可调
 }
 ```
 
@@ -654,6 +654,51 @@ N×8 个 folder 再自己求和——那是几百行数据换 4 个数字。
   "generatedAt": 1767225600000
 }
 ```
+
+### 服务端日志（仅管理员）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/logs` | 倒序取一页，支持级别 / 关键词 / 日期区间 / 游标 |
+| GET | `/api/logs/status` | 当前配置 + 占用字节数与条数 |
+| PATCH | `/api/logs/config` | 改详细程度与容量上限 |
+| DELETE | `/api/logs` | 清空 |
+
+**为什么只给管理员**：日志里有账号邮箱、上游返回的原文错误与请求路径，
+是整个应用里除凭据之外最敏感的一坨数据，不该跟着普通用户走。
+
+**它为什么存在**：第一级后台基线是常驻的，它的流水不进活动中心（进了角标就永远
+亮着「N 个操作进行中」）。但「账号什么时候同步的、为什么失败、被限流了几次」
+仍然要有地方回答，这里就是那个地方。
+
+`GET /api/logs` 的查询参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `level` | `debug`/`info`/`warn`/`error`，取这一级**及以上** |
+| `q` | 正文子串，`%` 与 `_` 是字面量不是通配符 |
+| `from` / `to` | epoch 毫秒，闭区间 |
+| `before` | 游标，只取 id 更小（更旧）的。翻页用 |
+| `after` | 只取 id 更大（更新）的。日志页的「实时刷新」两秒问一次，用它做增量 |
+| `limit` | 1–200，默认 200 |
+
+```jsonc
+{
+  "entries": [
+    { "id": 812, "at": 1767225600000, "level": "warn",
+      "message": "同步尝试失败，退避后重试",
+      "meta": { "accountId": 2, "tier": "background", "attempt": 1, "maxAttempts": 3 },
+      "accountId": 2 }
+  ],
+  "hasMore": true    // 还有更旧的可以翻
+}
+```
+
+日志落在 SQLite 的 `logs` 表（不是滚动文件：按级别过滤、子串搜、取日期区间这三件事
+在文本文件上都得自己实现一遍）。容量上限按**日志正文的总字节数**算，超了从最旧的删。
+`level` 为 `info`（普通）时不记 HTTP 访问日志——它是条数最多的一类，
+而它对「后台同步为什么失败」毫无帮助；调成 `debug`（详细）才记。
+**控制台输出不受这一项影响**，那一路仍然只听 `LOG_LEVEL`。
 
 ---
 
@@ -758,3 +803,7 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));
 | 52 | GET | `/api/events` | 票据 / 用户 |
 | 53 | POST | `/api/credentials/reveal` | 用户（本人或管理员） |
 | 54 | POST | `/api/credentials/export` | 管理员 |
+| 55 | GET | `/api/logs` | 管理员 |
+| 56 | GET | `/api/logs/status` | 管理员 |
+| 57 | PATCH | `/api/logs/config` | 管理员 |
+| 58 | DELETE | `/api/logs` | 管理员 |

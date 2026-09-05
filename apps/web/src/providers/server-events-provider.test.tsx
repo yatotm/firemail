@@ -312,3 +312,70 @@ describe('断点续传', () => {
     expect(FakeEventSource.instances[1]?.url).toContain('lastEventId=77');
   });
 });
+
+/**
+ * `syncingAccountIds` 驱动顶栏同步按钮与侧栏账号后面的转圈。
+ * 第一级后台基线是常驻的——让它进这个集合，转圈就永远停不下来，
+ * 也就再也指示不了「你刚点的那件事」了。
+ */
+describe('只有用户发起的同步才转圈', () => {
+  function SyncingProbe() {
+    const { syncingAccountIds } = useServerEvents();
+    return <p data-testid="syncing">{[...syncingAccountIds].sort((a, b) => a - b).join(',')}</p>;
+  }
+
+  async function connected() {
+    renderProvider(<SyncingProbe />);
+    await settle();
+    const source = FakeEventSource.instances[0];
+    act(() => source?.open());
+    return source;
+  }
+
+  function emit(source: FakeEventSource | undefined, event: { type: string; [key: string]: unknown }) {
+    act(() => {
+      source?.listeners.get(event.type)?.({
+        data: JSON.stringify(event),
+      } as MessageEvent<string>);
+    });
+  }
+
+  const syncing = () => screen.getByTestId('syncing').textContent;
+
+  it('background 的 sync:start 不进集合', async () => {
+    const source = await connected();
+    emit(source, { type: 'sync:start', accountId: 4, tier: 'background' });
+    expect(syncing()).toBe('');
+  });
+
+  it.each(['bulk', 'interactive'] as const)('%s 的 sync:start 进集合', async (tier) => {
+    const source = await connected();
+    emit(source, { type: 'sync:start', accountId: 4, tier });
+    expect(syncing()).toBe('4');
+  });
+
+  it('不带 tier 的 sync:start 照常进集合', async () => {
+    const source = await connected();
+    emit(source, { type: 'sync:start', accountId: 4 });
+    expect(syncing()).toBe('4');
+  });
+
+  it('落定事件无条件摘掉，混进来的 start 不会留下一个永远转圈的账号', async () => {
+    const source = await connected();
+    emit(source, { type: 'sync:start', accountId: 4, tier: 'interactive' });
+    emit(source, { type: 'sync:start', accountId: 5, tier: 'bulk' });
+    expect(syncing()).toBe('4,5');
+
+    emit(source, { type: 'sync:done', accountId: 4, newMessages: 0, tier: 'background' });
+    emit(source, { type: 'sync:error', accountId: 5, message: '超时', tier: 'background' });
+    expect(syncing()).toBe('');
+  });
+
+  it('后台同步的 done 照样刷新计数——转圈可以省，新邮件不能不显示', async () => {
+    const source = await connected();
+    emit(source, { type: 'sync:start', accountId: 4, tier: 'background' });
+    emit(source, { type: 'sync:done', accountId: 4, newMessages: 3, tier: 'background' });
+    // 集合始终为空，但 summary 的 invalidate 走的是同一条分支（没有被 tier 短路掉）
+    expect(syncing()).toBe('');
+  });
+});

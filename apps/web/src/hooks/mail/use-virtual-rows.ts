@@ -23,6 +23,8 @@ export interface VirtualRows extends VirtualWindow {
   /** 距顶部 8px 以内算「在顶部」，新邮件可以直接插入。 */
   isAtTop: () => boolean;
   scrollTop: number;
+  /** 行偏移的前缀和。悬浮分组头要用它算「现在钉的是哪一组」，不必再算一遍。 */
+  offsets: readonly number[];
 }
 
 const AT_TOP_THRESHOLD = 8;
@@ -97,5 +99,5 @@ export function useVirtualRows({
     [containerRef],
   );
 
-  return { ...view, onScroll, scrollToIndex, scrollToTop, isAtTop, scrollTop };
+  return { ...view, onScroll, scrollToIndex, scrollToTop, isAtTop, scrollTop, offsets };
 }

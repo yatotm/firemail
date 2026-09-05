@@ -10,7 +10,13 @@ const SETTINGS_SECTIONS: { to: string; label: string }[] = [
   { to: '/settings/about', label: '关于' },
 ];
 
-/** 设置分类栏（200px）。管理员额外多一个「用户管理」入口 —— 那是它唯一的常驻导航位。 */
+/** 只有管理员看得到：日志里有邮箱地址、上游原文错误与请求路径。 */
+const ADMIN_SECTIONS: { to: string; label: string }[] = [
+  { to: '/settings/logs', label: '日志' },
+  { to: '/admin/users', label: '用户管理' },
+];
+
+/** 设置分类栏（200px）。管理员额外多出日志与用户管理两个入口。 */
 export function SettingsNav({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate?: () => void }) {
   return (
     <nav aria-label="设置分类" className="w-full shrink-0 border-b p-2 md:w-50 md:border-r md:border-b-0">
@@ -20,11 +26,13 @@ export function SettingsNav({ isAdmin, onNavigate }: { isAdmin: boolean; onNavig
             <SettingsNavLink to={item.to} label={item.label} onNavigate={onNavigate} />
           </li>
         ))}
-        {isAdmin ? (
-          <li className="md:mt-2 md:border-t md:pt-2">
-            <SettingsNavLink to="/admin/users" label="用户管理" onNavigate={onNavigate} />
-          </li>
-        ) : null}
+        {isAdmin
+          ? ADMIN_SECTIONS.map((item, index) => (
+              <li key={item.to} className={index === 0 ? 'md:mt-2 md:border-t md:pt-2' : undefined}>
+                <SettingsNavLink to={item.to} label={item.label} onNavigate={onNavigate} />
+              </li>
+            ))
+          : null}
       </ul>
     </nav>
   );

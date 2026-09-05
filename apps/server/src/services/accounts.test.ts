@@ -5,6 +5,7 @@ import { SecretBox, generateKey, isEncrypted } from '../crypto/secretBox.ts';
 import { createDb, openSqlite, type Db } from '../db/client.ts';
 import { applyMigrations } from '../db/migrate.ts';
 import { accounts, users } from '../db/schema.ts';
+import { SYNC_INTERVAL_DEFAULT_SECONDS } from '@firemail/shared';
 import { AccountService, AccountServiceError, parseBulkImportPayload } from './accounts.ts';
 
 /**
@@ -142,12 +143,37 @@ test('同一用户内邮箱唯一；不同用户之间互不影响', () => {
   assert.doesNotThrow(() => ctx.service.create(2, outlookInput()));
 });
 
-test('非法邮箱、非法同步间隔被拒', () => {
+test('非法邮箱被拒', () => {
   assert.throws(() => ctx.service.create(1, { ...outlookInput('not-an-email') }), /email/i);
-  assert.throws(
-    () => ctx.service.create(1, { ...outlookInput('z@outlook.com'), syncIntervalSeconds: 5 }),
-    AccountServiceError,
-  );
+});
+
+/**
+ * 同步间隔是全局的：账号上没有单独的间隔可调，建号时按该用户此刻的设置落一份。
+ * 旧版这个字段挂在建号请求上，而设置页里那个「默认同步间隔」存下来之后没有任何
+ * 地方读它——两处都能填、两处对不上，改了还没效果。
+ */
+test('建号时的同步间隔取自该用户的全局设置，不由调用方指定', () => {
+  const scoped = new AccountService({
+    db: ctx.db,
+    box: ctx.box,
+    syncIntervalSeconds: (userId) => (userId === 1 ? 900 : 120),
+  });
+
+  assert.equal(scoped.create(1, outlookInput('a@outlook.com')).syncIntervalSeconds, 900);
+  assert.equal(scoped.create(2, outlookInput('b@outlook.com')).syncIntervalSeconds, 120);
+});
+
+test('改全局间隔会铺到该用户的每一个账号，别人的不受影响', () => {
+  const mine = [ctx.service.create(1, outlookInput('c@outlook.com')).id,
+                ctx.service.create(1, outlookInput('d@outlook.com')).id];
+  const theirs = ctx.service.create(2, outlookInput('e@outlook.com')).id;
+
+  ctx.service.setSyncInterval(1, 600);
+
+  for (const id of mine) {
+    assert.equal(ctx.service.get(1, id)?.syncIntervalSeconds, 600);
+  }
+  assert.equal(ctx.service.get(2, theirs)?.syncIntervalSeconds, SYNC_INTERVAL_DEFAULT_SECONDS);
 });
 
 /* ---------------------------------------------------------------- 读路径不泄密 */

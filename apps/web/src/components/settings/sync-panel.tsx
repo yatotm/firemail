@@ -7,8 +7,14 @@ import { useAccounts } from '@/hooks/use-accounts';
 import { isSyncIntervalValid, SYNC_INTERVAL_HINT } from '@/lib/accounts/provider-form';
 
 /**
- * 同步设置。间隔需要校验，所以它是少数几个有显式「保存」按钮的地方
- * —— 其余开关都是立即生效（screens.md §7）。
+ * 同步设置。
+ *
+ * 间隔是**全局**的：一个值管这个用户的所有账号，账号上没有单独的间隔可调。
+ * 旧版是「这里填新账号的默认值 + 每个账号再单独调」，两处都能填、两处对不上，
+ * 而且这里填的那个值存下来之后**没有任何地方读它**——改了完全没效果。
+ *
+ * 间隔需要校验，所以它是少数几个有显式「保存」按钮的地方 ——
+ * 其余开关都是立即生效（screens.md §7）。
  */
 export function SyncPanel() {
   const settings = useUserSettings();
@@ -33,8 +39,8 @@ export function SyncPanel() {
   return (
     <div className="divide-y">
       <SettingBlock
-        title="默认同步间隔"
-        description={`新账号会用这个间隔；已有账号在「账号管理 → 详情 → 同步」里单独设置。允许 ${SYNC_INTERVAL_HINT}。`}
+        title="同步间隔"
+        description={`所有账号统一使用这个间隔，保存后立即对已有账号生效。允许 ${SYNC_INTERVAL_HINT}。账号多的时候别调太短：29 个账号串行跑一圈约 250 秒，间隔小于它就永远追不上。`}
       >
         <div className="flex items-end gap-2">
           <TextField

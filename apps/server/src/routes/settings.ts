@@ -20,6 +20,17 @@ export function registerSettingsRoutes(app: FastifyInstance, ctx: AppContext): v
   app.patch('/settings', guard, async (request) => {
     const auth = requireContext(request);
     const patch = parseOrThrow(updateUserSettingsSchema, request.body);
-    return ok(ctx.settings.update(auth.user.id, patch));
+    const next = ctx.settings.update(auth.user.id, patch);
+
+    /*
+      同步间隔是**全局**的：一个值管这个用户的所有账号，账号上没有单独的间隔可调。
+      调度器读的仍然是 accounts.sync_interval_seconds 那一列，所以改完设置要就地
+      铺到每一行去，否则设置页显示的和实际跑的就是两回事——那正是这次要修掉的老毛病
+      （旧版这个值存下来之后没有任何地方读它，改了完全没效果）。
+    */
+    if (patch.syncIntervalSeconds !== undefined) {
+      ctx.accounts.setSyncInterval(auth.user.id, next.syncIntervalSeconds);
+    }
+    return ok(next);
   });
 }

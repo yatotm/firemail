@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { pino, type Logger } from 'pino';
+import { destination, multistream, pino, type Logger } from 'pino';
 import { ConfigError, loadConfig, type AppConfig } from './config.ts';
 import { bootstrapDatabase, KeyMismatchError } from './db/bootstrap.ts';
+import { LogStore } from './logs/store.ts';
 import { buildApp } from './http/app.ts';
 import { createContext, type AppContext } from './http/context.ts';
 import type { SyncLogger } from './sync/types.ts';
@@ -25,12 +26,24 @@ async function main(): Promise<void> {
 
   // 日志先于服务建立：同步引擎与 HTTP 必须写同一条流，
   // 否则后台同步的报错只会消失在 stdout 之外
-  const logger = pino({ level: config.logLevel });
+  //
+  // 两条出口：stdout 照旧听 FIREMAIL_LOG_LEVEL，另一条落库供设置里的日志页读。
+  // 根级别压到 debug 是为了让「详细模式」能在运行期打开而不用重启——
+  // 过滤交给两条流各自的门槛，stdout 的行为一个字都没变。
+  const logs = new LogStore({ sqlite: bootstrapped.sqlite });
+  const logger = pino(
+    { level: 'debug' },
+    multistream([
+      { level: config.logLevel, stream: destination(1) },
+      { level: 'debug', stream: logs.writable() },
+    ]),
+  );
   const ctx = createContext({
     config,
     db: bootstrapped.db,
     sqlite: bootstrapped.sqlite,
     box: bootstrapped.box,
+    logs,
     log: toSyncLogger(logger),
   });
 

@@ -25,8 +25,6 @@ export const MAX_INTERVAL_SECONDS = 86_400;
 export interface SyncSchedulerOptions {
   /** 检查「谁到期了」的节奏，不是同步周期本身。 */
   tickMs?: number;
-  /** 到期时间的随机抖动比例：±20% 让 29 个账号在几轮内自然错开。 */
-  jitterRatio?: number;
   now?: () => number;
   random?: () => number;
   log?: SyncLogger;
@@ -72,8 +70,7 @@ export interface BulkResult {
 
 const DEFAULTS = {
   tickMs: 15_000,
-  jitterRatio: 0.2,
-} satisfies Pick<SyncSchedulerOptions, 'tickMs' | 'jitterRatio'>;
+} satisfies Pick<SyncSchedulerOptions, 'tickMs'>;
 
 /**
  * 三层同步调度。
@@ -85,6 +82,11 @@ const DEFAULTS = {
  * | background  | 定时 | **串行**，账号间留固定间隔 | 被 bulk 抢占 | 退避重试 → 标记 → 连续多轮后升级 |
  * | bulk        | 用户点「全部同步」 | 并行，上限 = 并发配置 | 抢占 background | 退避重试 → 标记，**不再排后续重试** |
  * | interactive | 用户点单个账号「立即同步」 | 并行且插队 | 不抢占 | 退避重试 → 标记 |
+ *
+ * ## 排期
+ *
+ * 账号配置的间隔就是它两次后台同步之间的**绝对**时长，不叠随机抖动。
+ * 账号之间的错开由串行那一圈产生、由排期锚点保持，详见 `#reschedule`。
  *
  * ## 状态机
  *
@@ -108,7 +110,7 @@ export class SyncScheduler {
   readonly #db: Db;
   readonly #runner: SyncRunner;
   readonly #options: Required<
-    Pick<SyncSchedulerOptions, 'tickMs' | 'jitterRatio' | 'now' | 'random' | 'gapMs' | 'resumeDelayMs'>
+    Pick<SyncSchedulerOptions, 'tickMs' | 'now' | 'random' | 'gapMs' | 'resumeDelayMs'>
   >;
   readonly #log: SyncLogger | undefined;
   /** accountId -> 下次到期的时间戳。进程内状态，重启后按 last_synced_at 重算。 */
@@ -151,7 +153,6 @@ export class SyncScheduler {
     this.#onSuspend = options.onSuspend;
     this.#options = {
       tickMs: options.tickMs ?? DEFAULTS.tickMs,
-      jitterRatio: options.jitterRatio ?? DEFAULTS.jitterRatio,
       now: options.now ?? Date.now,
       random: options.random ?? Math.random,
       gapMs: options.gapMs ?? DEFAULT_TIER_GAP_MS,
@@ -272,7 +273,7 @@ export class SyncScheduler {
       this.#settle(account, round, 'interactive');
       return round.result;
     } finally {
-      this.#reschedule(account);
+      this.#reschedule(account, 'now');
       this.#emitTier('interactive', 'idle', 0);
     }
   }
@@ -333,7 +334,7 @@ export class SyncScheduler {
     } catch (error) {
       this.#log?.error('账号同步抛出异常', { accountId: account.id, error: String(error) });
     } finally {
-      this.#reschedule(account);
+      this.#reschedule(account, account.lastSyncedAt === null ? 'now' : 'grid');
     }
   }
 
@@ -346,7 +347,7 @@ export class SyncScheduler {
       result.failed.push(account.id);
       this.#log?.error('批量同步抛出异常', { accountId: account.id, error: String(error) });
     } finally {
-      this.#reschedule(account);
+      this.#reschedule(account, 'now');
     }
   }
 
@@ -463,11 +464,13 @@ export class SyncScheduler {
   // 候选与排期
   // -------------------------------------------------------------------------
 
+  /** 顺序必须稳定：相位错开按「第几个账号」分配，顺序一变所有账号的相位就跟着漂。 */
   #candidates(): AccountRow[] {
     const rows = this.#db
       .select()
       .from(accounts)
       .where(and(eq(accounts.syncEnabled, true), ne(accounts.status, 'disabled')))
+      .orderBy(accounts.id)
       .all();
     // 被自动暂停的账号退出轮询，直到用户点恢复。只观察模式下的记录不在此列。
     const suspended = this.#suspensions.enforcedIds(rows.map((row) => row.id));
@@ -497,19 +500,53 @@ export class SyncScheduler {
     return due;
   }
 
-  #reschedule(account: AccountRow): void {
-    this.#dueAt.set(account.id, this.#options.now() + this.#intervalMs(account));
+  /**
+   * 排下一次。两种锚点，对应「相位从哪来」和「相位怎么保住」。
+   *
+   * `'now'` —— 以这一刻为锚，下次 = 现在 + 间隔。用在三个地方：
+   * 用户点的批量同步、用户点的单账号同步，以及**账号的第一次后台同步**。
+   * 前两个是因为他刚拿到新数据，基线没理由紧接着再来一遍；第三个才是关键：
+   * 一次导入 29 个账号，它们的 `last_synced_at` 全是空、于是全部立刻到期，
+   * 而后台基线是串行的——第 i 个账号的完成时刻天然比第一个晚 i×(同步耗时+间隔)。
+   * 以完成时刻为锚，这一圈串行本身就是相位发生器，29 个账号自动摊到 4 分钟里。
+   *
+   * `'grid'` —— 以**上一次的到期时刻**为锚，下次 = 上次到期 + 间隔。稳态用它，
+   * 于是同步周期精确等于配置值，而且上面那一圈挣来的相位会被永久保持。
+   * 换成锚在完成时刻，每轮都会把周期悄悄加长一个同步耗时（6 秒），
+   * 29 个账号各漂各的，几小时后又糊回一坨。
+   *
+   * 落后超过一整个间隔时（同步比间隔还慢、或进程被挂起过）就地重起相位：
+   * 否则 `上次到期 + 间隔` 一直落在过去，这个账号会被每一个 tick 都判成到期。
+   */
+  #reschedule(account: AccountRow, anchor: 'grid' | 'now'): void {
+    const now = this.#options.now();
+    const interval = this.#intervalMs(account);
+    const previous = this.#dueAt.get(account.id);
+
+    let next = anchor === 'grid' && previous !== undefined ? previous + interval : now + interval;
+    if (next <= now) next = now + interval;
+
+    this.#dueAt.set(account.id, next);
   }
 
+  /**
+   * 账号配置的同步间隔，就是这个账号两次后台同步之间的**绝对**时长。
+   *
+   * 这里刻意不再叠随机抖动。抖动本来是用来防止账号扎堆的，但它防不住：
+   * 扎堆的根因是所有账号的相位相同，±20% 的噪声只把那个尖峰摊宽了 20%，
+   * 该一起醒的还是一起醒；代价却是「设置里写 300 秒、实际 240~360 秒」，
+   * 用户没法预期，排查限流时也说不清到底多久同步一次。
+   * 相位错开（见 #dueFor）解决的是同一个问题，而且是真的解决。
+   *
+   * 冷却倍数保留：那是上游明确说了「慢点」之后的降频，不是调度器自作主张的噪声。
+   */
   #intervalMs(account: AccountRow): number {
     const seconds = Math.min(
       MAX_INTERVAL_SECONDS,
       Math.max(MIN_INTERVAL_SECONDS, account.syncIntervalSeconds || MIN_INTERVAL_SECONDS),
     );
-    const jitter = this.#options.jitterRatio * (this.#options.random() * 2 - 1);
-    // 冷却是乘在抖动之后的：被限流的账号一样要错开相位，否则降频只是把撞车推迟。
-    // 再降频也不越过配置允许的最大周期，免得一个账号被冷却到几天不收信。
-    const cooled = seconds * 1000 * (1 + jitter) * this.#cooldown.multiplier(account.id);
+    // 再降频也不越过配置允许的最大周期，免得一个账号被冷却到几天不收信
+    const cooled = seconds * 1000 * this.#cooldown.multiplier(account.id);
     return Math.round(Math.min(cooled, MAX_INTERVAL_SECONDS * 1000));
   }
 }

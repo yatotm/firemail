@@ -179,6 +179,10 @@ docker compose logs firemail | grep '"level":50'   # 只看 error
 docker compose up -d
 ```
 
+不想重建容器的话，**设置 → 日志**（仅管理员）里也能看同一批日志：它是 pino 的第二条
+出口，落在库里，支持按级别过滤、按正文搜索、取日期区间，「详细程度」在界面上就能改，
+不用重启。第一级后台同步的流水只在这里，活动中心不显示它。
+
 > **`.env` 里的变量不会自动进容器。** Compose 的 `.env` 只做**变量替换**，
 > 只有在 `docker-compose.yml` 的 `environment:` 里被显式引用的名字才会传进去。
 > 当前被引用的只有 `TZ` 和 `FIREMAIL_ENCRYPTION_KEY`。
@@ -199,10 +203,26 @@ docker compose up -d
 
 ## 9. 自行构建
 
+`docker-compose.yml` 里**没有** `build:`——它和 `image:` 同时存在时 `docker compose up`
+会优先用本机编译的结果，于是「我明明 pull 了怎么还是老版本」，而且本机编译出来的东西
+和 CI 发布的那一份没有任何东西保证它们一致。
+
+要在本机整体跑一遍镜像，用第二个 compose 文件（它换了容器名、端口 12381、
+独立的 `data-local/` 数据目录，不碰正在跑的生产容器）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+只想验证镜像能不能构建出来，不用起容器：
+
 ```bash
 docker build -t firemail:local .
-docker compose up -d --build
 ```
+
+> **日常改代码用不到这里的任何一条。** 用 `pnpm dev`（前端 :5173 + 后端 :3000，
+> 改代码秒级生效），见[开发指南](./development.md)。构建一次镜像要两三分钟，
+> 拿它当开发循环是不可行的。
 
 构建是多阶段的：`deps`（只拷 manifest + lockfile，依赖不变时可复用）→ `build`
 （shared → web → server，然后 `pnpm deploy --prod` 裁出仅含生产依赖的目录）→ `runtime`

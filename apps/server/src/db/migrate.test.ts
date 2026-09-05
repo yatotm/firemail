@@ -42,7 +42,7 @@ const insertMessage = (db: Sqlite, id: number, subject: string, body: string): v
 
 // ---------- 迁移 ----------
 
-test('迁移把 8 张业务表和 FTS 表都建出来', () => {
+test('迁移把 9 张业务表和 FTS 表都建出来', () => {
   const db = migrated();
   const tables = new Set(
     (db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string }>)
@@ -57,11 +57,12 @@ test('迁移把 8 张业务表和 FTS 表都建出来', () => {
     'sessions',
     'settings',
     'sync_runs',
+    'logs',
     'messages_fts',
   ]) {
     assert.ok(tables.has(t), `缺少表 ${t}`);
   }
-  assert.deepEqual(appliedMigrations(db), ['0000_init', '0001_fts_messages']);
+  assert.deepEqual(appliedMigrations(db), ['0000_init', '0001_fts_messages', '0002_logs']);
   db.close();
 });
 
@@ -76,9 +77,9 @@ test('重复应用迁移是幂等的', () => {
   const c = applyMigrations(second);
   second.close();
 
-  assert.deepEqual(a.applied, ['0000_init', '0001_fts_messages']);
+  assert.deepEqual(a.applied, ['0000_init', '0001_fts_messages', '0002_logs']);
   assert.deepEqual(b.applied, []);
-  assert.deepEqual(b.skipped, ['0000_init', '0001_fts_messages']);
+  assert.deepEqual(b.skipped, ['0000_init', '0001_fts_messages', '0002_logs']);
   assert.deepEqual(c.applied, []);
 });
 

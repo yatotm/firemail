@@ -1,6 +1,7 @@
 import {
   bulkImportAccountsRequestSchema,
   createAccountRequestSchema,
+  SYNC_INTERVAL_DEFAULT_SECONDS,
   updateAccountRequestSchema,
   type Account,
   type AccountListQuery,
@@ -55,6 +56,8 @@ export interface AccountServiceOptions {
   db: Db;
   box: SecretBox;
   now?: () => number;
+  /** 该用户当前的全局同步间隔（秒）。不给就用出厂默认值，测试里可以省掉。 */
+  syncIntervalSeconds?: (userId: number) => number;
 }
 
 /**
@@ -71,6 +74,7 @@ export class AccountService {
   readonly #now: () => number;
   readonly #smtp: SmtpHealthStore;
   readonly #suspensions: SyncSuspensionStore;
+  readonly #intervalFor: (userId: number) => number;
 
   constructor(options: AccountServiceOptions) {
     this.#db = options.db;
@@ -78,6 +82,22 @@ export class AccountService {
     this.#now = options.now ?? Date.now;
     this.#smtp = new SmtpHealthStore({ db: options.db, now: this.#now });
     this.#suspensions = new SyncSuspensionStore({ db: options.db });
+    this.#intervalFor = options.syncIntervalSeconds ?? (() => SYNC_INTERVAL_DEFAULT_SECONDS);
+  }
+
+  /**
+   * 把同步间隔铺到该用户的**每一个**账号上。「设置 → 同步」改完就调它。
+   *
+   * 同步间隔是全局的：调度器读的仍然是 accounts.sync_interval_seconds 那一列，
+   * 而这个方法保证那一列永远等于用户设置里的值。让调度器反过来去查设置也行，
+   * 但那样每个 tick 都要为每个账号解一次 JSON，而这件事一天也发生不了一次。
+   */
+  setSyncInterval(userId: number, seconds: number): void {
+    this.#db
+      .update(accounts)
+      .set({ syncIntervalSeconds: seconds, updatedAt: new Date(this.#now()) })
+      .where(eq(accounts.userId, userId))
+      .run();
   }
 
   list(userId: number, query: AccountListQuery = {}): Account[] {
@@ -171,7 +191,8 @@ export class AccountService {
         oauthRefreshTokenEnc: this.#box.encryptNullable(data.oauthRefreshToken),
         oauthScope: data.oauthScope ?? null,
         syncEnabled: data.syncEnabled,
-        syncIntervalSeconds: data.syncIntervalSeconds,
+        // 间隔是全局的，建号时按该用户此刻的设置落一份
+        syncIntervalSeconds: this.#intervalFor(userId),
         status: 'active',
         createdAt: at,
         updatedAt: at,
@@ -234,9 +255,6 @@ export class AccountService {
             }),
         ...(data.oauthScope === undefined ? {} : { oauthScope: data.oauthScope }),
         ...(data.syncEnabled === undefined ? {} : { syncEnabled: data.syncEnabled }),
-        ...(data.syncIntervalSeconds === undefined
-          ? {}
-          : { syncIntervalSeconds: data.syncIntervalSeconds }),
         ...(data.status === undefined ? {} : { status: data.status }),
         updatedAt: new Date(this.#now()),
       })

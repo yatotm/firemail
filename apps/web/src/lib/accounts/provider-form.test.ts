@@ -144,11 +144,14 @@ describe('编辑请求只提交改动', () => {
     if (result.ok) expect(result.data.oauthRefreshToken).toBe('new-token');
   });
 
-  it('改同步间隔会一起提交', () => {
-    const form = { ...formFromAccount(outlookAccount), syncIntervalSeconds: '600' };
-    const result = toUpdateRequest(form, outlookAccount);
+  /**
+   * 同步间隔已经改成全局的，账号表单里不再有这个字段。
+   * 旧版两处都能填（建号表单 + 设置页），而设置页那个值存下来之后没有任何地方读它。
+   */
+  it('提交里不再带同步间隔，它由「设置 → 同步」统一决定', () => {
+    const result = toUpdateRequest(formFromAccount(outlookAccount), outlookAccount);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.syncIntervalSeconds).toBe(600);
+    if (result.ok) expect('syncIntervalSeconds' in result.data).toBe(false);
   });
 });
 

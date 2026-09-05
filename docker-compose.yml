@@ -1,10 +1,17 @@
+# 部署用。跑的是 Docker Hub 上发布好的镜像，**不在本机编译**。
+#
+# 这里刻意没有 `build:`：它和 `image:` 同时存在时，`docker compose up` 会优先用
+# 本地编译的结果，于是「我明明 pull 了怎么还是老版本」——而且本机编译出来的东西
+# 和 CI 发布的那一份没有任何东西保证它们一致。
+#
+# 日常开发不用这个文件，用 `pnpm dev`（前端 :5173 + 后端 :3000，改代码秒级生效）。
+# 真要在本机整体验证一次镜像，见 docker-compose.build.yml。
 name: firemail-v2
 
 services:
   firemail:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # 跟着 2.x 的所有更新走。想钉死在某一版就写 :2.1.0；想跑 master 上还没发版的
+    # 代码写 :edge（每次合并 master 后由 Actions 自动更新）。
     image: yatotm1994/firemail:2
     container_name: firemail-v2
     restart: unless-stopped

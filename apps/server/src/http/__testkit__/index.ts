@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
+import { pino } from 'pino';
 import type { AppConfig } from '../../config.ts';
 import { SecretBox, generateKey } from '../../crypto/secretBox.ts';
 import { createDb, openSqlite, type Db, type Sqlite } from '../../db/client.ts';
@@ -35,6 +36,12 @@ export interface TestAppOptions {
   /** 建一个 `<dataDir>/web/index.html`，用来验证 SPA 回退。 */
   withWebDist?: boolean;
   now?: () => number;
+  /**
+   * 把 HTTP 日志接到 `ctx.logs`（而不是像默认那样整个关掉）。
+   * 日志页的用例要走这条真实路径，否则「路由写了一条日志」这件事根本没被验证。
+   * 只写库不写 stdout，其他用例仍然是安静的。
+   */
+  captureLogs?: boolean;
 }
 
 export interface TestApp {
@@ -102,7 +109,12 @@ export async function makeApp(options: TestAppOptions = {}): Promise<TestApp> {
     ...(options.now ? { now: options.now } : {}),
   });
 
-  const app = await buildApp({ ctx, logger: false });
+  const app = await buildApp({
+    ctx,
+    ...(options.captureLogs
+      ? { loggerInstance: pino({ level: 'debug' }, ctx.logs.writable()) }
+      : { logger: false }),
+  });
 
   return {
     app,

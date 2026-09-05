@@ -11,6 +11,7 @@
     "dev": "pnpm --parallel --filter \"./apps/*\" dev",
     "build": "pnpm --filter @firemail/shared build && pnpm --filter @firemail/web build && pnpm --filter @firemail/server build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "release": "node tools/release.mjs"
   }
 }

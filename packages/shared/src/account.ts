@@ -113,6 +113,11 @@ export const accountSchema = z
     smtpCheckedAt: nullableTimestampSchema.default(null),
 
     syncEnabled: z.boolean(),
+    /**
+     * 这个账号当前生效的同步间隔（秒）。**只读**：它由「设置 → 同步」统一决定，
+     * 改设置时服务端会把新值写到该用户的每一个账号上，所以这里读到的永远等于那个值。
+     * 建接口不接受这个字段——单独调某一个账号的间隔已经在产品上取消了。
+     */
     syncIntervalSeconds: z.number().int(),
     lastSyncedAt: nullableTimestampSchema,
 
@@ -157,12 +162,6 @@ const createAccountBase = z
     provider: accountProviderSchema,
     authType: accountAuthTypeSchema,
     syncEnabled: z.boolean().default(true),
-    syncIntervalSeconds: z
-      .number()
-      .int()
-      .min(SYNC_INTERVAL_MIN_SECONDS)
-      .max(SYNC_INTERVAL_MAX_SECONDS)
-      .default(SYNC_INTERVAL_DEFAULT_SECONDS),
   })
   .merge(connectionFieldsSchema)
   .merge(credentialFieldsSchema);
