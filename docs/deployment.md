@@ -14,7 +14,7 @@ FireMail v2 是**一个容器一个端口**：Fastify 同时提供 `/api/*` 和�
 仓库根目录的 `docker-compose.yml` 可以直接用：
 
 ```bash
-git clone https://github.com/yatotm/firemail.git
+git clone https://github.com/yatotm/firemail-v2.git
 cd firemail
 cp .env.example .env
 # 打开 .env，把 FIREMAIL_ENCRYPTION_KEY 填上（见 §3）

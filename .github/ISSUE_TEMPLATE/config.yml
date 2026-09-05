@@ -1,11 +1,11 @@
 blank_issues_enabled: true
 contact_links:
   - name: 部署与配置问题
-    url: https://github.com/yatotm/firemail/blob/master/docs/deployment.md
+    url: https://github.com/yatotm/firemail-v2/blob/master/docs/deployment.md
     about: 端口、反向代理、备份、升级、健康检查，先看这里
   - name: 环境变量说明
-    url: https://github.com/yatotm/firemail/blob/master/docs/configuration.md
+    url: https://github.com/yatotm/firemail-v2/blob/master/docs/configuration.md
     about: 全部环境变量的默认值、取值范围与失败表现
   - name: 从 v1 迁移
-    url: https://github.com/yatotm/firemail/blob/master/docs/migration-v1-to-v2.md
+    url: https://github.com/yatotm/firemail-v2/blob/master/docs/migration-v1-to-v2.md
     about: 数据搬迁、凭据校验、切换与回退步骤

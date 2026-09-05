@@ -12,7 +12,7 @@ Outlook、Gmail、QQ 邮箱和任意 IMAP 收进一条信流，账号是不是�
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](package.json)
 [![Docker Hub](https://img.shields.io/badge/docker-yatotm1994%2Ffiremail%3A2-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/yatotm1994/firemail)
-[![Build](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml/badge.svg)](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml)
+[![Build](https://github.com/yatotm/firemail-v2/actions/workflows/docker-image.yml/badge.svg)](https://github.com/yatotm/firemail-v2/actions/workflows/docker-image.yml)
 
 [快速开始](#快速开始) · [截图](#截图) · [文档](docs/README.md) · [从 v1 升级](docs/migration-v1-to-v2.md)
 
@@ -56,7 +56,7 @@ Outlook、Gmail、QQ 邮箱和任意 IMAP 收进一条信流，账号是不是�
 ## 快速开始
 
 ```bash
-git clone https://github.com/yatotm/firemail.git
+git clone https://github.com/yatotm/firemail-v2.git
 cd firemail
 cp .env.example .env
 

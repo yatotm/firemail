@@ -9,7 +9,7 @@
 
 ```bash
 corepack enable
-git clone https://github.com/yatotm/firemail.git
+git clone https://github.com/yatotm/firemail-v2.git
 cd firemail
 pnpm install
 ```

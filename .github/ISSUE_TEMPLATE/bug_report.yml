@@ -6,8 +6,8 @@ body:
     attributes:
       value: |
         提交前请先确认：
-        - 已经翻过 [已有 issue](https://github.com/yatotm/firemail/issues?q=is%3Aissue)
-        - 已经看过[部署](https://github.com/yatotm/firemail/blob/master/docs/deployment.md)与[配置](https://github.com/yatotm/firemail/blob/master/docs/configuration.md)文档
+        - 已经翻过 [已有 issue](https://github.com/yatotm/firemail-v2/issues?q=is%3Aissue)
+        - 已经看过[部署](https://github.com/yatotm/firemail-v2/blob/master/docs/deployment.md)与[配置](https://github.com/yatotm/firemail-v2/blob/master/docs/configuration.md)文档
 
         **不要在 issue 里贴邮箱口令、`refresh_token`、`FIREMAIL_ENCRYPTION_KEY` 或任何日志里的凭据片段。**
 

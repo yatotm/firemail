@@ -12,7 +12,7 @@ Outlook, Gmail, QQ Mail and plain IMAP in one stream, with account health always
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](package.json)
 [![Docker Hub](https://img.shields.io/badge/docker-yatotm1994%2Ffiremail%3A2-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/yatotm1994/firemail)
-[![Build](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml/badge.svg)](https://github.com/yatotm/firemail/actions/workflows/docker-image.yml)
+[![Build](https://github.com/yatotm/firemail-v2/actions/workflows/docker-image.yml/badge.svg)](https://github.com/yatotm/firemail-v2/actions/workflows/docker-image.yml)
 
 [Quick start](#quick-start) · [Screenshots](#screenshots) · [Docs](docs/README.md) · [Upgrading from v1](docs/migration-v1-to-v2.md)
 
@@ -56,7 +56,7 @@ Demo instance. Every address, name and message in the shots is made up.
 ## Quick start
 
 ```bash
-git clone https://github.com/yatotm/firemail.git
+git clone https://github.com/yatotm/firemail-v2.git
 cd firemail
 cp .env.example .env
 
