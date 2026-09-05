@@ -2,11 +2,26 @@ name: Docker image
 
 # 触发时机：
 #   - push 到 master        -> 推 edge 与 sha-xxxxxxx 标签
-#   - push v* 语义化标签    -> 推 2 / 2.0 / 2.0.0 / latest
+#   - push v* 语义化标签    -> 推 2 / 2.0 / 2.0.0 / latest，并建 GitHub Release
 #   - 改动 Dockerfile 的 PR -> 只构建不推送，尽早发现构建期问题
 #
 # 这里刻意不加 paths-ignore：push 的路径过滤同样作用于 tag，
 # 一个只改了文档的提交被打上发版标签时会整个跳过构建，那比多跑几次构建糟糕得多。
+#
+# ## 两个架构各自用原生机器构建，不再用 QEMU
+#
+# 曾经是单机 QEMU 交叉构建 amd64 + arm64。它挂了：v2.1.0 那次 arm64 的
+# `pnpm install` 卡死 108 分钟不动（amd64 早已构建完），最后只能人工取消。
+# 原因是 pnpm 用 worker_threads 解包，而 QEMU 用户态模拟下 Node 的线程同步
+# 会偶发死锁——它不是「慢」，是真的停在那里，而且没有超时会一直烧到 6 小时上限。
+#
+# 现在改成 matrix：amd64 在 ubuntu-latest、arm64 在 ubuntu-24.04-arm（GitHub 对
+# 公共仓库免费提供的原生 ARM 机器）。两边并行、都是原生执行，最后由 merge 作业把
+# 两个 digest 合成一个多架构 manifest。用户侧完全无感：`docker pull` 到的还是同一个
+# 标签，按自己的架构取对应那份。
+#
+# 每个作业都设了 timeout-minutes。上面那次事故真正的代价不是构建失败，
+# 而是失败得不够快——没有超时的挂起会安静地烧掉几小时才被人发现。
 
 on:
   push:
@@ -24,37 +39,116 @@ concurrency:
   group: docker-image-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Docker Hub 的仓库名不允许大写字母，这里必须是全小写。
+  IMAGE: yatotm1994/firemail
+
 jobs:
-  build:
+  # 「这次要不要推送」是三个作业共用的判据，算一次传下去。
+  # 不在每个作业里各写一遍 `secrets.X != ''`：job 级的 if 读不到 env，
+  # 各写各的迟早会漂成两套规则。
+  setup:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      push: ${{ steps.decide.outputs.push }}
+
+    steps:
+      - name: 判断是否推送
+        id: decide
+        env:
+          # 没配 Docker Hub 凭据时降级为「只构建不推送」。否则 login-action 会以
+          # "Username and password required" 失败，让每一次 master push 都挂一个
+          # 红叉，而构建本身其实是好的——那样的红叉久了就没人看了。
+          HAS_CREDENTIALS: ${{ secrets.DOCKER_HUB_USERNAME != '' && secrets.DOCKER_HUB_TOKEN != '' }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ] && [ "$HAS_CREDENTIALS" = "true" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未配置 DOCKER_HUB_USERNAME / DOCKER_HUB_TOKEN，或这是 PR：只构建不推送。"
+          fi
+
+  build:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # 原生构建满打满算十来分钟；超过就是出事了，早点炸掉比空转好
+    timeout-minutes: 30
     permissions:
       contents: read
-
-    # 没配 Docker Hub 凭据时降级为「只构建不推送」。否则 login-action 会以
-    # "Username and password required" 失败，让每一次 master push 都挂一个红叉，
-    # 而构建本身其实是好的——那样的红叉久了就没人看了。
-    env:
-      PUSH: ${{ github.event_name != 'pull_request' && secrets.DOCKER_HUB_USERNAME != '' && secrets.DOCKER_HUB_TOKEN != '' }}
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
 
-      - name: 提示缺少 Docker Hub 凭据
-        if: github.event_name != 'pull_request' && env.PUSH != 'true'
-        run: |
-          echo "::warning::未配置 DOCKER_HUB_USERNAME / DOCKER_HUB_TOKEN，本次只构建不推送镜像。"
-          echo "在 Settings → Secrets and variables → Actions 添加这两个 Secret 后即可自动发布。" >> "$GITHUB_STEP_SUMMARY"
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v4
 
-      # 多架构说明：v2 的镜像里没有任何写死架构的二进制（v1 曾内置 amd64 的 Caddy）。
-      # node:22-alpine 有 amd64/arm64 两个变体，全部原生依赖
-      # （better-sqlite3、esbuild、rollup、@tailwindcss/oxide、lightningcss）
-      # 都发布了 linux-arm64 / linuxmusl-arm64 产物，因此 arm64 是真的能构建出来的。
-      - name: 准备 QEMU（arm64 交叉构建）
-        if: env.PUSH == 'true'
-        uses: docker/setup-qemu-action@v4
+      - name: 登录 Docker Hub
+        if: needs.setup.outputs.push == 'true'
+        uses: docker/login-action@v4
         with:
-          platforms: arm64
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      # 推送时**不打标签**，只按内容摘要推上去（push-by-digest），标签留给 merge
+      # 作业统一贴。两个架构各自打标签的话，后推的那个会把先推的顶掉。
+      - name: 构建
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.title=FireMail
+            org.opencontainers.image.description=自托管的多账号邮件聚合客户端
+            org.opencontainers.image.licenses=Apache-2.0
+          outputs: ${{ needs.setup.outputs.push == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=cacheonly' }}
+          provenance: false
+          # 两个架构的缓存互不干扰，否则后跑完的会覆盖先跑完的
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,scope=${{ matrix.platform }},mode=max
+
+      # 摘要是个纯文本，用空文件的**文件名**传递，比塞进 job outputs 简单：
+      # matrix 的 outputs 是最后写的那个赢，两个架构会互相覆盖。
+      - name: 导出摘要
+        if: needs.setup.outputs.push == 'true'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: 上传摘要
+        if: needs.setup.outputs.push == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # 把两个架构的摘要合成一个多架构 manifest，标签在这里才贴上去。
+  merge:
+    if: needs.setup.outputs.push == 'true'
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 下载全部摘要
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
 
       - name: 准备 Buildx
         uses: docker/setup-buildx-action@v4
@@ -63,8 +157,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          # Docker Hub 的仓库名不允许大写字母，这里必须是全小写。
-          images: yatotm1994/firemail
+          images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -72,40 +165,31 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/master' }}
             type=sha,format=short
-          labels: |
-            org.opencontainers.image.title=FireMail
-            org.opencontainers.image.description=自托管的多账号邮件聚合客户端
-            org.opencontainers.image.licenses=Apache-2.0
 
-      # 需要仓库 Secrets：DOCKER_HUB_USERNAME、DOCKER_HUB_TOKEN（Docker Hub 的 Access Token）
       - name: 登录 Docker Hub
-        if: env.PUSH == 'true'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: 构建并推送
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          # 不推送时只验 amd64：arm64 走 QEMU 模拟，跑一次要十几分钟，
-          # 不值得卡住每个 PR，也不值得为一次不会发布的构建付这个时间。
-          platforms: ${{ env.PUSH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          push: ${{ env.PUSH == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: 合并成多架构 manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: 核对推上去的东西
+        run: docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}"
 
   # 发布说明放在这个工作流里而不是单开一个，是为了拿到 needs 这个顺序保证：
   # Release 一出现就意味着镜像**已经**在 Docker Hub 上了。两个工作流并行跑的话，
   # 看到 Release 的人可能比镜像先到，照着说明 docker pull 会扑空。
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: merge
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
 
