@@ -7,3 +7,9 @@ packages:
 onlyBuiltDependencies:
   - better-sqlite3
   - esbuild
+
+# drizzle-kit 还挂着已废弃的 @esbuild-kit/esm-loader，它锁死 esbuild 0.18，
+# 而 esbuild <0.25 有 GHSA-67mh-4wv8-2f99。这条链只在本地跑 db:generate 时加载
+# TS 配置文件，用不到出问题的 dev server，但留着会一直占着一条 Dependabot 告警。
+overrides:
+  '@esbuild-kit/core-utils>esbuild': ^0.25.0

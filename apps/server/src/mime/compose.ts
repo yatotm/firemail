@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import MailComposer from 'nodemailer/lib/mail-composer/index.js';
+// nodemailer 10 起有 exports 映射，只认 'nodemailer/lib/mail-composer' 这个子路径，
+// 带 /index.js 的老写法会解析成 dist/esm/mail-composer/index.js.js 而报错
+import MailComposer from 'nodemailer/lib/mail-composer';
 import type { EmailAddress } from './addresses.ts';
 import { formatAddress } from './addresses.ts';
 import { escapeHtml, sanitizeEmailHtml } from './sanitize.ts';
