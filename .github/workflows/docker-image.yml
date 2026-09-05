@@ -30,26 +30,38 @@ jobs:
     permissions:
       contents: read
 
+    # 没配 Docker Hub 凭据时降级为「只构建不推送」。否则 login-action 会以
+    # "Username and password required" 失败，让每一次 master push 都挂一个红叉，
+    # 而构建本身其实是好的——那样的红叉久了就没人看了。
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' && secrets.DOCKER_HUB_USERNAME != '' && secrets.DOCKER_HUB_TOKEN != '' }}
+
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: 提示缺少 Docker Hub 凭据
+        if: github.event_name != 'pull_request' && env.PUSH != 'true'
+        run: |
+          echo "::warning::未配置 DOCKER_HUB_USERNAME / DOCKER_HUB_TOKEN，本次只构建不推送镜像。"
+          echo "在 Settings → Secrets and variables → Actions 添加这两个 Secret 后即可自动发布。" >> "$GITHUB_STEP_SUMMARY"
 
       # 多架构说明：v2 的镜像里没有任何写死架构的二进制（v1 曾内置 amd64 的 Caddy）。
       # node:22-alpine 有 amd64/arm64 两个变体，全部原生依赖
       # （better-sqlite3、esbuild、rollup、@tailwindcss/oxide、lightningcss）
       # 都发布了 linux-arm64 / linuxmusl-arm64 产物，因此 arm64 是真的能构建出来的。
       - name: 准备 QEMU（arm64 交叉构建）
-        if: github.event_name != 'pull_request'
-        uses: docker/setup-qemu-action@v3
+        if: env.PUSH == 'true'
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
       - name: 准备 Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: 计算镜像标签
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           # Docker Hub 的仓库名不允许大写字母，这里必须是全小写。
           images: yatotm1994/firemail
@@ -67,19 +79,20 @@ jobs:
 
       # 需要仓库 Secrets：DOCKER_HUB_USERNAME、DOCKER_HUB_TOKEN（Docker Hub 的 Access Token）
       - name: 登录 Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: 构建并推送
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
-          # PR 只验 amd64：arm64 走 QEMU 模拟，跑一次要十几分钟，不值得卡住每个 PR
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.event_name != 'pull_request' }}
+          # 不推送时只验 amd64：arm64 走 QEMU 模拟，跑一次要十几分钟，
+          # 不值得卡住每个 PR，也不值得为一次不会发布的构建付这个时间。
+          platforms: ${{ env.PUSH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ env.PUSH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
