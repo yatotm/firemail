@@ -1,0 +1,26 @@
+# 在本机把镜像整个编译出来跑一遍。**日常开发用不到这个**——
+# 改代码用 `pnpm dev`（秒级热更新），这里每次要花两三分钟。
+#
+# 什么时候才需要它：动了 Dockerfile、pnpm-lock.yaml、或者加了运行期要用到的新文件
+# （比如新的迁移 SQL），想在推之前确认镜像里真的有它。
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# 刻意做成第二个文件、而不是叫 docker-compose.override.yml：override 会被 compose
+# **自动**加载，而这台机器上部署目录和代码目录是同一个，那样生产会在某天悄悄变成
+# 「跑本机编译的版本」。要用就得在命令行里显式写出来。
+services:
+  firemail:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 换个名字，免得把 Docker Hub 拉下来的那份正式镜像覆盖掉
+    image: firemail:local
+    container_name: firemail-local
+    # `!override` 是必须的：compose 合并两个文件时，列表默认是**追加**而不是替换。
+    # 不加的话这里会变成同时监听 12380 和 12381、同时挂 data 和 data-local——
+    # 前者跟正在跑的生产容器抢端口，后者是同一个挂载点上的两条冲突记录。
+    ports: !override
+      - "12381:3000"
+    volumes: !override
+      - ./data-local:/app/data

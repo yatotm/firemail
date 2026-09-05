@@ -184,6 +184,27 @@ docker compose pull && docker compose up -d
 `docker-compose.yml` 里锁的是 `yatotm1994/firemail:2`，跟着 2.x 的所有更新走；
 想钉死在某一版就把它改成 `:2.1.0`。想跑 master 上还没发版的代码用 `:edge`。
 
+### Docker 在这条链路里的位置
+
+**日常开发完全不碰 Docker。** 改代码用 `pnpm dev`（见 §2），秒级生效；
+构建一次镜像要两三分钟，拿它当开发循环是不可行的。
+
+**CI 打镜像不看 `docker-compose.yml`。** 它的输入只有 `Dockerfile` 和仓库根目录
+（`docker/build-push-action` 的 `context: .`）。compose 文件里写什么都不影响
+发布出去的镜像——那个文件只服务于「在某台机器上把这个应用跑起来」。
+
+于是整条链路是：
+
+```
+改代码 → pnpm dev 看效果 → pnpm test → 推分支 → PR → CI → 合并 master
+                                                                 ↓
+                                          pnpm release 2.1.0 → 推 tag
+                                                                 ↓
+                              Actions 用 Dockerfile 打镜像 → Docker Hub
+                                                                 ↓
+                                    服务器 docker compose pull && up -d
+```
+
 ### 一个坑
 
 仓库里还留着一个 v1 时代的本地 tag `v0.0.1`。**不要用 `git push --tags` 或

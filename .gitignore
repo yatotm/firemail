@@ -7,6 +7,8 @@ dist/
 
 # 运行时数据目录（v2 的 SQLite 库、附件、自动生成的密钥）
 /data/
+# 本机验证镜像时用的独立数据目录，见 docker-compose.build.yml
+/data-local/
 # 凭据加密密钥。泄露=所有邮箱凭据可解密，丢失=只能逐个重新授权
 .encryption-key
 *.db
