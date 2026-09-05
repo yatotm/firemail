@@ -55,6 +55,40 @@ export FIREMAIL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 代理目标可以用 `FIREMAIL_API_TARGET` 改（默认 `http://localhost:3000`）。
 全部环境变量见[配置参考](./configuration.md)。
 
+### 开发环境会在本机留下什么
+
+只有两样，都在仓库目录里、都被 `.gitignore` 挡着，删掉即可复原，**不往系统里装任何东西**：
+
+| 位置 | 是什么 | 清理 |
+| --- | --- | --- |
+| `node_modules/`（根 + 各包） | 依赖。内容是指向 pnpm 全局 store 的硬链接，实际占用远小于 `du` 显示的数字 | `rm -rf node_modules apps/*/node_modules packages/*/node_modules` |
+| `apps/server/data/` | 开发用的 SQLite 库、附件、自动生成的密钥 | 直接删目录 |
+| `dist/`、`.vite/`、`*.tsbuildinfo` | 构建产物 | `git clean -Xd -n` 先看，确认后去掉 `-n` |
+
+Node 走 corepack + `packageManager` 字段，**不需要任何 `npm -g` 安装**；
+环境变量用 `export` 只影响当前终端。所以「污染本机」的实际面积就是上面这几个目录。
+
+> **数据目录是相对 cwd 解析的**（`FIREMAIL_DATA_DIR ?? 'data'`）。
+> `pnpm dev` 时服务端的 cwd 是 `apps/server`，所以开发数据落在 `apps/server/data/`，
+> 和部署用的根目录 `data/` 是两份，互不影响。
+> 但如果你在**仓库根目录**手动跑 `node apps/server/dist/index.js`，cwd 就是根目录，
+> 它会直接读写生产库——真要这么跑就显式给上 `FIREMAIL_DATA_DIR`。
+
+### 想要更彻底的隔离
+
+上面那点足够了的话就别加东西。真嫌不够（比如这台机器同时是生产机），两条路：
+
+1. **VS Code / JetBrains 的 Dev Container** —— 本机只装 Docker 和编辑器，
+   依赖和运行时全在容器里，`node_modules` 放容器内的 volume，一个文件都不落本机。
+   代价是每次进出容器有几秒开销，且要多维护一个 `.devcontainer/`。
+2. **只隔离数据** —— 起服务端时给一个临时数据目录，跑完就删：
+
+   ```bash
+   FIREMAIL_DATA_DIR=$(mktemp -d) pnpm --filter @firemail/server dev
+   ```
+
+   这条对「怕碰到生产库」这一类担心最划算：一行命令，不引入任何新工具。
+
 ## 3. 常用命令
 
 | 命令 | 作用 |
