@@ -65,6 +65,7 @@ export FIREMAIL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 | `pnpm --filter @firemail/server test` | 只跑服务端测试（`node --test`） |
 | `pnpm --filter @firemail/web test` | 只跑前端测试（vitest + jsdom） |
 | `pnpm --filter @firemail/web lint` | ESLint（含 `jsx-a11y`、`react-hooks`） |
+| `pnpm release <版本号>` | 发版：改版本号、跑全套检查、提交、打 tag（见 §8） |
 
 跑单个服务端测试文件：
 
@@ -134,3 +135,58 @@ apps/server/src/
 - 提交信息用 Conventional Commits（`feat:` / `fix:` / `docs:` / `refactor:` / `chore:`）。
 - PR 前至少跑通 `pnpm typecheck` 与 `pnpm test`。
 - 涉及数据库、密钥、邮件渲染、认证的改动，在 PR 描述里单独说明影响面。
+
+## 8. 发版
+
+版本号按语义化版本走：
+
+| 段位 | 什么时候动 | 例子 |
+| --- | --- | --- |
+| 主版本 `3.0.0` | 破坏性改动：配置项改名、数据要迁移、接口不兼容 | v1 → v2 |
+| 次版本 `2.1.0` | 加了新功能，老用户升级不用做任何事 | 新增设置里的日志页 |
+| 补丁号 `2.0.1` | 只修 bug，用户看不到任何新东西 | 修同步转圈 |
+
+版本号写在 **6 个地方**（5 个 `package.json` + `apps/server/src/routes/health.ts` 的
+`VERSION`，后者是 `/api/health` 返回的那个）。不做成「一处定义、其余引用」是因为
+服务端那份要在编译产物里可用、而 workspace 各包本来就得各写各的；
+代价用 `apps/server/src/version.test.ts` 兜住——漏改一处 CI 就红。
+
+### 步骤
+
+```bash
+git checkout master && git pull
+pnpm release 2.1.0
+```
+
+脚本会：校验工作区干净、在 master 上、tag 没被用过、版本号只往前走 →
+跑 typecheck / lint / test / build → 改完 6 处版本号 → 提交 `chore(release): v2.1.0`
+→ 打 annotated tag `v2.1.0`。
+
+**它不推送。** 推 tag 是唯一不可撤销的一步（正式版本号一旦发出去就不该被重写），
+留给人确认。脚本最后会把这两条命令原样打出来：
+
+```bash
+git push origin master
+git push origin v2.1.0
+```
+
+推 tag 之后 Actions 自动做两件事，第二件 `needs` 第一件（Release 一出现就意味着镜像已经在了）：
+
+1. 构建多架构镜像并推 Docker Hub：`2.1.0` / `2.1` / `2` / `latest`
+2. 建 GitHub Release，发布说明从上一个 tag 到这个 tag 的提交自动生成
+
+### 生产环境升级
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+`docker-compose.yml` 里锁的是 `yatotm1994/firemail:2`，跟着 2.x 的所有更新走；
+想钉死在某一版就把它改成 `:2.1.0`。想跑 master 上还没发版的代码用 `:edge`。
+
+### 一个坑
+
+仓库里还留着一个 v1 时代的本地 tag `v0.0.1`。**不要用 `git push --tags` 或
+`--follow-tags`**——它会把这个 tag 一起推上去，Actions 会当成正式发版，
+往 Docker Hub 推 `0` / `0.0` / `0.0.1` / **`latest`**，而 `latest` 会因此指向 v1 的代码。
+推 tag 一律写全名：`git push origin v2.1.0`。
