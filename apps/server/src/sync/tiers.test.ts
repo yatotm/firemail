@@ -67,7 +67,6 @@ function scheduler(h: Harness, runner: SyncRunner, options: SyncSchedulerOptions
     {
       now: () => h.clock.now,
       random: () => 0.5,
-      jitterRatio: 0,
       log: NOOP_LOGGER,
       gapMs: 0,
       resumeDelayMs: 0,
