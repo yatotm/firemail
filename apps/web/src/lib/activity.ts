@@ -141,6 +141,21 @@ export function unresolvedCount(entries: readonly ActivityEntry[]): number {
 }
 
 /**
+ * 第一级后台基线是**常驻**的：29 个账号、每个 5 分钟一轮，任意时刻几乎总有一个在跑。
+ * 把它们记进活动中心，角标就长期亮着「N 个操作进行中」、图标长期是个转圈——
+ * 那不是「有事在发生」，那是这个应用活着的常态，而常态不该占用一个提示位。
+ *
+ * 活动中心只记用户自己发起的事（第二级批量、第三级单账号、连接测试、重新授权），
+ * 它回答的问题是「我刚点的那下怎么样了」。后台基线的流水去设置里的日志页看。
+ *
+ * 后台同步真出了事仍然到得了用户眼前：账号状态跃迁会推 `account:status`，
+ * 那条不带层级、照常落成一条记录并弹 toast。
+ */
+function isBackground(event: { tier?: string }): boolean {
+  return event.tier === 'background';
+}
+
+/**
  * SSE 事件 → 活动记录的映射。返回 null 表示这个事件与活动中心无关。
  * 只认 `sync:*` 与 `account:status`：连接测试和重新授权没有对应的服务端事件，
  * 由发起它们的 mutation 自己 settle。
@@ -148,16 +163,20 @@ export function unresolvedCount(entries: readonly ActivityEntry[]): number {
 export function activityFromEvent(event: ServerEvent): BeginInput | SettleInput | null {
   switch (event.type) {
     case 'sync:start':
-      return { kind: 'sync', accountId: event.accountId, accountEmail: '' };
+      return isBackground(event) ? null : { kind: 'sync', accountId: event.accountId, accountEmail: '' };
     case 'sync:done':
-      return {
-        kind: 'sync',
-        accountId: event.accountId,
-        status: 'success',
-        detail: event.newMessages > 0 ? `新增 ${event.newMessages} 封` : '没有新邮件',
-      };
+      return isBackground(event)
+        ? null
+        : {
+            kind: 'sync',
+            accountId: event.accountId,
+            status: 'success',
+            detail: event.newMessages > 0 ? `新增 ${event.newMessages} 封` : '没有新邮件',
+          };
     case 'sync:error':
-      return { kind: 'sync', accountId: event.accountId, status: 'error', detail: event.message };
+      return isBackground(event)
+        ? null
+        : { kind: 'sync', accountId: event.accountId, status: 'error', detail: event.message };
     case 'account:status':
       return event.status === 'auth_error'
         ? {

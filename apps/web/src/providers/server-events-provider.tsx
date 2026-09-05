@@ -65,11 +65,23 @@ export function ServerEventsProvider({
   const handleEvent = useCallback(
     (event: ServerEvent) => {
       switch (event.type) {
+        /*
+          第一级后台基线不进这个集合。它驱动的是顶栏同步按钮和侧栏账号后面的转圈，
+          而后台基线是常驻的——让它去转，动画就永远停不下来，也就再也指示不了任何东西。
+          转圈只表示「你刚点的那件事正在做」。后台的进度去日志页看。
+
+          落定事件（done / error）**无条件**从集合里摘：万一有一条 start 因为
+          断线重连、老版本服务端不带 tier 之类的原因混了进来，也必须有路径把它清掉，
+          否则那个账号就永远转圈了。
+        */
         case 'sync:start':
-          setSyncingAccountIds((prev) => new Set(prev).add(event.accountId));
+          if (event.tier !== 'background') {
+            setSyncingAccountIds((prev) => new Set(prev).add(event.accountId));
+          }
           break;
         case 'sync:done':
           setSyncingAccountIds((prev) => removeFrom(prev, event.accountId));
+          // 后台同步收到的新邮件一样要更新计数，这里不能跟着 tier 一起跳过
           void queryClient.invalidateQueries({ queryKey: queryKeys.summary });
           break;
         case 'sync:error':
@@ -200,7 +212,9 @@ function useLinkState(diagnostics: SseDiagnostics): SseLinkState {
   return link;
 }
 
+/** 不在集合里就原样返回：后台基线每轮都发 done，每次都造新 Set 会白刷整棵外壳。 */
 function removeFrom(set: ReadonlySet<number>, id: number): ReadonlySet<number> {
+  if (!set.has(id)) return set;
   const next = new Set(set);
   next.delete(id);
   return next;

@@ -194,4 +194,39 @@ describe('SSE 事件 → 活动记录', () => {
       activityFromEvent({ type: 'message:new', accountId: 1, folderId: 2, messageIds: [9] }),
     ).toBeNull();
   });
+
+  /**
+   * 第一级后台基线是常驻的，把它记进来角标就永远亮着「进行中」，
+   * 图标也永远是个转圈——那时候转圈已经不指示任何东西了。
+   */
+  describe('第一级后台基线不进活动中心', () => {
+    it.each(['sync:start', 'sync:done', 'sync:error'] as const)('%s 带 background 时返回 null', (type) => {
+      const event =
+        type === 'sync:done'
+          ? { type, accountId: 3, newMessages: 5, tier: 'background' as const }
+          : type === 'sync:error'
+            ? { type, accountId: 3, message: '连不上', tier: 'background' as const }
+            : { type, accountId: 3, tier: 'background' as const };
+      expect(activityFromEvent(event)).toBeNull();
+    });
+
+    it.each(['bulk', 'interactive'] as const)('用户发起的 %s 照常记录', (tier) => {
+      expect(activityFromEvent({ type: 'sync:start', accountId: 3, tier })).not.toBeNull();
+      expect(
+        activityFromEvent({ type: 'sync:done', accountId: 3, newMessages: 1, tier }),
+      ).toMatchObject({ status: 'success' });
+      expect(
+        activityFromEvent({ type: 'sync:error', accountId: 3, message: '超时', tier }),
+      ).toMatchObject({ status: 'error' });
+    });
+
+    it('不带 tier 的事件按「用户发起」处理，宁可多显示也不要漏掉用户点的那一下', () => {
+      expect(activityFromEvent({ type: 'sync:start', accountId: 3 })).not.toBeNull();
+    });
+
+    it('后台同步把账号弄挂了仍然到得了用户眼前——那走的是 account:status', () => {
+      expect(activityFromEvent({ type: 'account:status', accountId: 3, status: 'auth_error' })).
+        toMatchObject({ kind: 'reauth', status: 'error' });
+    });
+  });
 });
